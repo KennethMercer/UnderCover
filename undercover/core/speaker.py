@@ -52,8 +52,10 @@ class SpeakerEmbedder:
         setup_models.ensure(files={setup_models.SPEAKER_MODEL: setup_models.SPEAKER_URL})
         opts = ort.SessionOptions()
         opts.log_severity_level = 3
-        self.sess = ort.InferenceSession(str(path("models_dir") / setup_models.SPEAKER_MODEL), opts,
-                                         providers=["CPUExecutionProvider"])
+        f = path("models_dir") / setup_models.SPEAKER_MODEL
+        self.sess = ort.InferenceSession(str(f), opts, providers=["CPUExecutionProvider"])
+        st = f.stat()
+        self.model_key = (str(f), st.st_size, st.st_mtime_ns)   # which model this is (a voice check keeps prints by it)
 
     @staticmethod
     def _fbank(audio16: np.ndarray) -> np.ndarray:

@@ -318,7 +318,10 @@ class Trainer:
             o = net_g.infer(x["phone"][None], torch.tensor([n], device=self.device), x["pitch"][None],
                             x["pitchf"][None], torch.zeros(1, dtype=torch.long, device=self.device))[0][0, 0].float()
             m1 = mel_spectrogram_torch(o[None], c["n_fft"], c["mels"], sr, c["hop"], c["n_fft"])
-            m2 = mel_spectrogram_torch(x["wav"][None].float(), c["n_fft"], c["mels"], sr, c["hop"], c["n_fft"])
+            mk = (c["n_fft"], c["mels"], sr, c["hop"])   # the held-out phrase's own mel never changes: made once a run
+            if x.get("_m2", (None,))[0] != mk:
+                x["_m2"] = (mk, mel_spectrogram_torch(x["wav"][None].float(), c["n_fft"], c["mels"], sr, c["hop"], c["n_fft"]))
+            m2 = x["_m2"][1]
             t = min(m1.shape[-1], m2.shape[-1])
             losses.append(F.l1_loss(m1[..., :t], m2[..., :t]).item())
         torch.random.set_rng_state(state)

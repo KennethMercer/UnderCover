@@ -6722,7 +6722,7 @@ def u_rcpreview():
     st = inspect.getsource(VP.start)
     assert 'if os.environ.get("UNDERCOVER_NO_BACKFILL"):' in st and "jobs.JOBS.pop(j.id, None)" in st
     assert '"UNDERCOVER_NO_BACKFILL": "1"' in inspect.getsource(sys.modules[__name__])
-    assert 'pack["ready"] = bool(pack_ready(' in inspect.getsource(VP.key) and "wait=20.0)" in inspect.getsource(srv.Handler._voice_upload)
+    assert 'pack["ready"] = _pack_ready(' in inspect.getsource(VP.key) and "bool(pack_ready(" in inspect.getsource(VP._pack_ready) and "wait=20.0)" in inspect.getsource(srv.Handler._voice_upload)
     assert 'out["check_s"] = round(service.check_estimate_s(person, len(cands))' in inspect.getsource(FA._auto_plan)
     page = {f: (web / f).read_text(encoding="utf-8") for f in ("app.js", "oneshot.js", "speakeasy.js", "doubleagent.js")}
     assert "const chk = p.check_s != null ? etaWords" in page["oneshot.js"]
@@ -15557,6 +15557,418 @@ def u_perf_library():
 
 
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
+@check("perf: voices' meta.json read once per change (a rewrite misses, callers' changes stay theirs, safe across threads); the preview's record kept by stat")
+def u_perf_voices():
+    import threading
+    from undercover.core import fsutil, voicepreview, voices as V
+    from undercover.core.config import path
+    with isolated_data():
+        vdir = path("voices_dir")
+        for i in range(3):
+            d = vdir / f"pv-{i}"
+            d.mkdir(parents=True)
+            (d / "model.pth").write_bytes(b"\0" * 100)
+            if i != 2:
+                (d / "model.index").write_bytes(b"\0" * 50)
+            meta = {"name": d.name, "dir": "X:/elsewhere", "pth": "X:/elsewhere/model.pth",
+                    "index": "X:/elsewhere/model.index", "version": "v2", "sr": 40000, "extra": {"person": f"P {i}"}}
+            fsutil.write_text(d / "meta.json", json.dumps(meta))
+        (vdir / "no-meta").mkdir()
+        V._META.clear()
+        vs = V.list_voices()
+        assert [v.name for v in vs] == ["pv-0", "pv-1", "pv-2"], [v.name for v in vs]
+        assert vs[0].dir == vdir / "pv-0" and vs[0].pth == vdir / "pv-0" / "model.pth" and vs[0].index == vdir / "pv-0" / "model.index", vs[0]
+        assert vs[2].index == Path("X:/elsewhere/model.index"), "a file not next to meta.json isn't the stored path any more"
+        f0 = str(vdir / "pv-0" / "meta.json")
+        assert len(V._META) == 3 and f0 in V._META, list(V._META)
+        stamp, text = V._META[f0]
+        V._META[f0] = (stamp, text.replace('"P 0"', '"From the memo"'))   # same stat: served from the memo
+        assert V.get_voice("pv-0").extra["person"] == "From the memo", "an unchanged meta.json was read again"
+        vs = V.list_voices()
+        vs[1].extra["person"] = "changed by a caller"   # (callers do change their Voice's extra in place)
+        assert V.get_voice("pv-1").extra["person"] == "P 1", "a caller's change reached the memo"
+        v = V.get_voice("pv-0")
+        v.extra = {"person": "Rewritten"}
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json()))   # a writer anywhere: the stat changes
+        assert V.get_voice("pv-0").extra["person"] == "Rewritten", "a rewritten meta.json came from the memo"
+        V.set_display("pv-1", "Shown")
+        assert V.get_voice("pv-1").display == "Shown"
+        errors = []
+
+        def reader():
+            try:
+                for _ in range(30):
+                    names = [x.name for x in V.list_voices()]
+                    assert names == ["pv-0", "pv-1", "pv-2"], names
+            except Exception as e:   # noqa: BLE001
+                errors.append(e)
+
+        def writer():
+            try:
+                for k in range(30):
+                    x = V.get_voice("pv-2")
+                    x.display = f"Name {k}"
+                    fsutil.write_text(x.dir / "meta.json", json.dumps(x.to_json()))
+            except Exception as e:   # noqa: BLE001
+                errors.append(e)
+        ts = [threading.Thread(target=reader) for _ in range(4)] + [threading.Thread(target=writer)]
+        for t_ in ts:
+            t_.start()
+        for t_ in ts:
+            t_.join(60)
+        assert not errors, errors[:2]
+        assert V.get_voice("pv-2").display == "Name 29", V.get_voice("pv-2").display
+        # the preview line's record: read by stat, a new record (another key) misses
+        v = V.get_voice("pv-0")
+        (v.dir / "preview.mp3").write_bytes(b"\0" * 10)
+        fsutil.write_text(v.dir / "preview.json", json.dumps({"key": voicepreview.key(v)}))
+        voicepreview._RECS.clear()
+        assert voicepreview.fresh(v) and len(voicepreview._RECS) == 1
+        rec = str(v.dir / "preview.json")
+        voicepreview._RECS[rec] = (voicepreview._RECS[rec][0], "not-the-key")   # same stat: the memo answers
+        assert not voicepreview.fresh(v), "an unchanged preview.json was read again"
+        fsutil.write_text(v.dir / "preview.json", json.dumps({"key": voicepreview.key(v)}))
+        assert voicepreview.fresh(v), "a rewritten preview.json came from the memo"
+        v.display = "Another name"   # what the line says changed: not fresh, whatever the memo holds
+        assert not voicepreview.fresh(v)
+        (v.dir / "preview.mp3").unlink()
+        v.display = ""
+        assert not voicepreview.fresh(v), "fresh without its clip"
+        # an engine's readiness is kept READY_TTL seconds, then asked again
+        voicepreview._READY.clear()
+        voicepreview._READY[("chatterbox", None)] = (time.monotonic(), "kept")
+        assert voicepreview._pack_ready("chatterbox", None) == "kept"
+        voicepreview._READY[("chatterbox", None)] = (time.monotonic() - voicepreview.READY_TTL - 1, "kept")
+        assert voicepreview._pack_ready("chatterbox", None) in (True, False), "a readiness past its time wasn't asked again"
+        voicepreview._READY[("chatterbox", None)] = (time.monotonic(), "kept")
+        assert voicepreview._pack_ready("chatterbox", None, fresh=True) in (True, False), "a render recorded a kept readiness"
+        assert voicepreview._pack_ready("chatterbox", ["not", "a", "name"]) in (True, False)   # (unhashable: asked, not kept)
+        assert 'key(v, fresh=True)' in __import__("inspect").getsource(voicepreview.make), "make() records a kept readiness"
+        voicepreview._READY.clear()
+    V._META.clear()
+    voicepreview._RECS.clear()
+    return f"3 voices, a rewrite and a display change seen at once; 4 readers + 1 writer x 30; readiness kept {voicepreview.READY_TTL:.0f} s"
+
+
+@check("perf: page files carry an ETag (304 when unchanged), the CSP made once per change, gzip only when asked (phones)")
+def u_perf_static():
+    import gzip
+    import http.client
+    import tempfile
+    import threading
+    from undercover.app import server
+    idx = (server.WEB / "index.html").resolve()
+    page = server.static_page(idx)
+    body = idx.read_bytes()
+    assert page.body == body and page.csp == server.csp(body) and page.etag.startswith('"') and page.vary
+    assert server.static_page(idx) is page, "an unchanged page was made again"
+    assert gzip.decompress(page.gzipped()) == body and page.etag_gz != page.etag
+    for header, want in (("gzip, deflate, br", True), ("br;q=1.0, gzip;q=0.8", True), ("gzip;q=0", False),
+                         ("deflate", False), (None, False), ("GZIP", True), ("gzip;q=x", False)):
+        assert server.takes_gzip(header) is want, (header, want)
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:   # a rewritten file: its stat moves, it's made again
+        f = Path(td) / "a.js"
+        f.write_text("let a = 1;\n" * 200, encoding="utf-8")
+        a = server.static_page(f)
+        time.sleep(0.02)
+        f.write_text("let b = 2;\n" * 200, encoding="utf-8")
+        b = server.static_page(f)
+        assert b is not a and b.body != a.body and b.etag != a.etag and b.csp is None, "a changed file came from the memo"
+        small = Path(td) / "s.css"
+        small.write_text("a{}", encoding="utf-8")
+        assert not server.static_page(small).vary and server.static_page(small).gzipped() is None
+        server._STATIC.pop(str(f), None)
+        server._STATIC.pop(str(small), None)
+    with isolated_data():   # (the real Handler answers: on the test's own config, never the user's)
+        _static_over_http(server, page, body)
+    return f"index {len(body) // 1024} KB, gzip {len(page.gzipped()) // 1024} KB; 304 with no body, kept-alive after it"
+
+
+def _static_over_http(server, page, body):
+    import http.client
+    import threading
+    srv = server.ExclusiveServer(("127.0.0.1", 0), server.Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=10)
+
+        def get(p, **h):
+            conn.request("GET", p, headers=h)
+            r = conn.getresponse()
+            return r.status, r.read(), {k.lower(): v for k, v in r.getheaders()}
+        st, b1, h = get("/", **{"Accept-Encoding": "gzip"})
+        assert st == 200 and b1 == body and "content-encoding" not in h, "this PC got gzip (only phones do)"
+        assert h["etag"] == page.etag and h["cache-control"] == "no-cache" and h["content-security-policy"] == page.csp, h
+        st, b2, h = get("/", **{"If-None-Match": page.etag})
+        assert st == 304 and b2 == b"" and h["etag"] == page.etag and "content-length" not in h, (st, len(b2), h)
+        st, b3, _ = get("/", **{"If-None-Match": '"stale", W/' + page.etag})
+        assert st == 304 and not b3, "a list holding the tag (weak form) wasn't a 304"
+        st, b4, _ = get("/", **{"If-None-Match": '"stale"'})
+        assert st == 200 and b4 == body, "another tag got a 304"
+        st, js, h = get("/static/app.js")   # the same connection after a 304: still in step
+        assert st == 200 and js == (server.WEB / "app.js").read_bytes(), st
+        assert get("/static/../config.toml")[0] == 404 and get("/static/nope.js")[0] == 404
+        conn.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+class _CountingModels:
+    """Stand-ins for RMVPE, HuBERT, the converter and the speaker embedder that count their calls (perf2's checks)."""
+
+    def __init__(self):
+        import torch
+        self.calls = {"f0": 0, "hubert": 0, "embed": 0, "convert": 0}
+        self.device, self.half = torch.device("cpu"), False
+        outer = self
+
+        class Rmvpe:
+            def infer_from_audio(self, x, thred=0.03, one_line=False):
+                import numpy as np
+                outer.calls["f0"] += 1
+                return np.where(np.abs(x[::160]) > 1e-4, 110.0 + 10 * np.abs(x[::160]), 0.0).astype(np.float32)
+
+        class Hubert:
+            def extract(self, wav, version):
+                outer.calls["hubert"] += 1
+                w = wav[0].float()
+                n = w.shape[0] // 320
+                return w[: n * 320].reshape(1, n, 320)[..., :8] + (0.5 if version == "v1" else 0.0)
+        self.rmvpe, self.hubert = Rmvpe(), Hubert()
+        self.model_key = ("fake-embedder",)
+
+    def convert(self, x, voice, s=None):
+        import numpy as np
+        self.calls["convert"] += 1
+        return (np.asarray(x, np.float32) * 0.9 + 0.001 * len(str(voice))), 16000
+
+    def embed(self, x):
+        import numpy as np
+        self.calls["embed"] += 1
+        v = np.array([np.abs(x).mean(), x.std(), np.abs(np.diff(x)).mean(), 1.0], np.float32)
+        return v / np.linalg.norm(v)
+
+
+@check("perf: a voice check works out the voice-independent side once (pitch, prints, features, the person's range); a re-cut clip misses")
+def u_perf_voicecheck():
+    import tempfile
+    import numpy as np
+    import threading
+    from types import SimpleNamespace
+    import soundfile as sf
+    from undercover.doubleagent import voicecheck as vc
+    m = _CountingModels()
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:
+        clips = Path(td)
+        rng = np.random.default_rng(3)
+        phrases = []
+        for i in range(3):
+            sf.write(str(clips / f"c{i}.wav"), (0.3 * np.sin(np.arange(16000 * 3) / 16000 * 2 * np.pi * (120 + 10 * i))).astype(np.float32), 16000)
+            phrases.append(SimpleNamespace(id=f"c{i}", dur=3.0, score=1.0 - i / 10))
+        proj = SimpleNamespace(training_phrases=lambda: phrases, clip_path=lambda pid: clips / f"{pid}.wav")
+        tests = ([(0.2 * rng.standard_normal(16000 * 3)).astype(np.float32) for _ in range(4)],
+                 np.array([0.5, 0.5, 0.5, 0.5], np.float32), "speech")
+        vc._INPUT.clear()
+        vc._RANGE.clear()
+        q1 = vc.check("voice-a", proj, m, m, tests=tests).to_json()
+        first = dict(m.calls)
+        assert first == {"f0": 3 + 2 * 4, "hubert": 2 * 4, "embed": 2 * 4, "convert": 4}, first
+        q2 = vc.check("voice-a", proj, m, m, tests=tests).to_json()
+        again = {k: m.calls[k] - first[k] for k in m.calls}
+        assert again == {"f0": 4, "hubert": 4, "embed": 4, "convert": 4}, f"the input side was worked out again: {again}"
+        assert q1 == q2, (q1, q2)
+        fresh = ([x.copy() for x in tests[0]], tests[1], "speech")   # the same samples in new arrays (a one-shot's
+        n0 = dict(m.calls)                                               # next candidate): kept by content
+        vc.check("voice-b", proj, m, m, tests=fresh)
+        assert m.calls["f0"] - n0["f0"] == 4 and m.calls["embed"] - n0["embed"] == 4, "new arrays of the same phrases missed"
+        f = vc._phrase_f0(m.rmvpe, tests[0][0])
+        f[:] = -1   # a caller's copy: never the kept one
+        assert (vc._phrase_f0(m.rmvpe, tests[0][0]) >= 0).all(), "a caller's change reached the kept pitch track"
+        time.sleep(0.02)
+        sf.write(str(clips / "c0.wav"), np.zeros(16000 * 3, np.float32) + 0.01, 16000)   # a clip re-cut: its range again
+        n1 = m.calls["f0"]
+        vc.target_range(proj, m.rmvpe)
+        assert m.calls["f0"] - n1 == 3, "a changed clip's pitch came from the memo"
+        vc.target_range(proj, m.rmvpe)
+        assert m.calls["f0"] - n1 == 3, "an unchanged range was read again"
+        out, errors = [], []
+
+        def run():
+            try:
+                out.append(vc.check("voice-a", proj, m, m, tests=tests).to_json()["score"])
+            except Exception as e:   # noqa: BLE001
+                errors.append(e)
+        vc._INPUT.clear()
+        ts = [threading.Thread(target=run) for _ in range(6)]
+        for t_ in ts:
+            t_.start()
+        for t_ in ts:
+            t_.join(60)
+        assert not errors and len(set(out)) == 1 and out[0] == q1["score"], (errors[:1], out)
+        other = _CountingModels()   # a converter made again: its models are new objects, never served the old values
+        assert vc._model_token(other.rmvpe) != vc._model_token(m.rmvpe) and vc._model_token(m.rmvpe) == vc._model_token(m.rmvpe)
+        n2 = other.calls["f0"]
+        vc._phrase_f0(other.rmvpe, tests[0][0])
+        assert other.calls["f0"] == n2 + 1, "a new pitch model was served another's values"
+        for i in range(vc.INPUT_KEEP + 5):   # bounded: the oldest go
+            vc._phrase_f0(m.rmvpe, np.full(1600, i / 1000, np.float32))
+        assert len(vc._INPUT) == vc.INPUT_KEEP, len(vc._INPUT)
+    vc._INPUT.clear()
+    vc._RANGE.clear()
+    return f"a second check of the same phrases: RMVPE {again['f0']} calls (was {first['f0']}), HuBERT {again['hubert']} (was {first['hubert']}), prints {again['embed']} (was {first['embed']}); 6 threads agree"
+
+
+@check("perf: a duet's two voices share one HuBERT pass per chunk inside shared_f0 (kept by the samples and the RVC version)")
+def u_perf_duet_feats():
+    import numpy as np
+    from types import SimpleNamespace
+    from undercover.core.engine import convert as C
+    m = _CountingModels()
+    conv = C.Converter.__new__(C.Converter)
+    conv.device, conv.half, conv.hubert, conv.rmvpe = m.device, False, m.hubert, m.rmvpe
+    conv._f0_memo = conv._feat_memo = None
+
+    class Net:
+        def infer(self, feats, lengths, *rest):
+            return ((feats.mean(-1, keepdim=True).transpose(1, 2)[:, :, :] * 1.0)[None][0][None],)
+    lv2 = SimpleNamespace(version="v2", index=None, net=Net(), tgt_sr=40000)
+    lv1 = SimpleNamespace(version="v1", index=None, net=Net(), tgt_sr=40000)
+    s = C.Settings(protect=0.5)
+    x = (0.1 * np.sin(np.arange(16000 * 2) / 16000 * 2 * np.pi * 200)).astype(np.float32)
+    alone = conv._vc_chunk_raw(lv2, x, None, None, s)
+    alone2 = conv._vc_chunk_raw(lv2, x, None, None, s)
+    assert m.calls["hubert"] == 2, "outside shared_f0 every chunk reads its own features"
+    with conv.shared_f0():
+        a = conv._vc_chunk_raw(lv2, x, None, None, s)
+        b = conv._vc_chunk_raw(lv2, x.copy(), None, None, s)   # the second voice, the same samples
+        assert m.calls["hubert"] == 3, f"the second voice read the features again ({m.calls['hubert']})"
+        c = conv._vc_chunk_raw(lv1, x, None, None, s)   # another RVC version: its own features
+        assert m.calls["hubert"] == 4
+        conv._vc_chunk_raw(lv2, x[:16000], None, None, s)   # other samples: their own
+        assert m.calls["hubert"] == 5
+    assert conv._feat_memo is None and conv._f0_memo is None, "the memo outlived its block"
+    assert np.array_equal(a, alone) and np.array_equal(b, alone) and np.array_equal(alone, alone2), "kept features changed the output"
+    assert not np.array_equal(c, a)
+    return "5 chunks, 3 HuBERT passes inside the block; outputs identical to reading them each time"
+
+
+@check("perf: training's held-out check makes each phrase's own mel once a run (the loss is the same)")
+def u_perf_validate():
+    import torch
+    from undercover.core.engine.rvc import train_parts
+    from undercover.doubleagent.trainer import SR_CFG, Trainer
+    sr = 40000
+    c = SR_CFG[sr]
+    g = torch.Generator().manual_seed(0)
+    hold = [{"wav": 0.1 * torch.randn(sr, generator=g), "phone": torch.zeros(100, 768), "pitch": torch.zeros(100, dtype=torch.long),
+             "pitchf": torch.zeros(100), "n": 100} for _ in range(3)]
+
+    class Net:
+        k = 0
+
+        def eval(self):
+            pass
+
+        def train(self):
+            pass
+
+        def infer(self, phone, n, pitch, pitchf, sid):
+            x = hold[Net.k % len(hold)]["wav"]
+            Net.k += 1
+            return ((x * 0.8)[None, None],)
+    tr = Trainer.__new__(Trainer)
+    tr.device = torch.device("cpu")
+    real, calls = train_parts.mel_spectrogram_torch, [0]
+
+    def counted(*a, **k):
+        calls[0] += 1
+        return real(*a, **k)
+    plain = [{k: v for k, v in x.items()} for x in hold]
+    try:
+        train_parts.mel_spectrogram_torch = counted
+        Net.k = 0
+        v1 = tr._validate(Net(), hold, c, sr)
+        assert calls[0] == 2 * len(hold), calls
+        Net.k = 0
+        v2 = tr._validate(Net(), hold, c, sr)
+        assert calls[0] == 3 * len(hold), f"the held-out mels were made again ({calls[0]})"
+        Net.k = 0
+        c2 = {**c, "mels": c["mels"] // 2}   # other settings: made again for them
+        tr._validate(Net(), hold, c2, sr)
+        assert calls[0] == 5 * len(hold), calls
+    finally:
+        train_parts.mel_spectrogram_torch = real
+    Net.k = 0
+    v0 = tr._validate(Net(), plain, c, sr)   # fresh items, nothing kept: the same loss
+    assert v1 == v2 == v0, (v1, v2, v0)
+    return f"{len(hold)} held-out phrases: mels {2 * len(hold)} on the first epoch, {len(hold)} after; loss identical"
+
+
+@check("perf: a separation pass encodes its stems side by side, the same samples as before, all done before it returns")
+def u_perf_stems_flac():
+    import threading
+    import numpy as np
+    import soundfile as sf
+    from types import SimpleNamespace
+    from undercover.core import separate
+    with isolated_data() as t:
+        song = t / "song.wav"
+        sr = 44100
+        x = (0.2 * np.sin(np.arange(sr * 2) / sr * 2 * np.pi * 330)).astype(np.float32)
+        sf.write(str(song), np.stack([x, x], 1), sr, subtype="PCM_16")
+        sep = separate.StemSeparator()
+        made, threads = {}, set()
+
+        class Fake:
+            model_instance = SimpleNamespace(overlap=None)
+
+            def separate(self, audio):
+                outs = []
+                for k, stem in enumerate(("Vocals", "Instrumental")):
+                    y = np.stack([x * (k + 1) / 3, x * (k + 2) / 4], 1)
+                    f = sep.work_dir / f"song_({stem})_model.wav"
+                    sf.write(str(f), y, sr, subtype="PCM_24")
+                    made[stem.lower()] = sf.read(str(f), dtype="int32")[0]
+                    outs.append(f.name)   # (bare names, as audio-separator returns them)
+                return outs
+        sep._get = lambda model: Fake()
+        real = separate.to_flac
+
+        def to_flac(w):
+            threads.add(threading.get_ident())
+            return real(w)
+        separate.to_flac = to_flac
+        try:
+            out = sep.run(song, "model.ckpt", t / "app" / "cache" / "stems" / "s1" / "main", overlap=2)
+        finally:
+            separate.to_flac = real
+        assert sorted(out) == ["instrumental", "vocals"] and all(p.suffix == ".flac" and p.is_file() for p in out.values()), out
+        assert not list(out["vocals"].parent.glob("*.wav")), "a WAV was left beside its FLAC"
+        for k, p in out.items():
+            y, rate = sf.read(str(p), dtype="int32")
+            assert rate == sr and np.array_equal(y, made[k]) and sf.info(str(p)).subtype == "PCM_24", f"{k}: not the same samples"
+        assert len(threads) == 2, f"the two stems weren't encoded side by side ({len(threads)} thread)"
+        again = sep.run(song, "model.ckpt", t / "app" / "cache" / "stems" / "s1" / "main", overlap=2)   # the cache, as before
+        assert again == out, (again, out)
+
+        class Twice(Fake):   # two outputs naming one stem: one at a time, the last one kept (as before)
+            def separate(self, audio):
+                outs = []
+                for k in range(2):
+                    f = sep.work_dir / f"song{k}_(Vocals)_model.wav"
+                    sf.write(str(f), np.stack([x * (k + 1) / 3] * 2, 1), sr, subtype="PCM_24")
+                    made[k] = sf.read(str(f), dtype="int32")[0]
+                    outs.append(f.name)
+                f = sep.work_dir / "song_(Instrumental)_model.wav"
+                sf.write(str(f), np.stack([x, x], 1), sr, subtype="PCM_24")
+                return outs + [f.name]
+        sep._get = lambda model: Twice()
+        two = sep.run(song, "model.ckpt", t / "app" / "cache" / "stems" / "s2" / "main", overlap=2)
+        assert two["vocals"].is_file() and np.array_equal(sf.read(str(two["vocals"]), dtype="int32")[0], made[1]), two
+    return "2 stems, 2 threads, bit-identical 24-bit FLAC, no WAV left; the second run from the cache"
+
+
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
     ("GET", "/static/icon-192.png"), ("GET", "/static/icon-512.png"), ("GET", "/files/output/x.mp3"), ("GET", "/pair"),
@@ -18021,7 +18433,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk,
-               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut, u_lead_pause, u_not_english):
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut, u_lead_pause, u_not_english, u_perf_voices, u_perf_static, u_perf_voicecheck, u_perf_duet_feats, u_perf_validate, u_perf_stems_flac):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
