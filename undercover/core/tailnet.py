@@ -50,6 +50,8 @@ STATE = {"want": False, "phase": "off", "auth_url": None, "approve_url": None, "
          "progress": None, "port": None, "private": False}
 _P = {"daemon": None, "up": None, "funnel": None, "serve": None, "driver": None, "out": [], "fetch_failed": 0.0,
       "public": False}
+OUT_LINES = 200          # the CLI's output kept for its sign-in and approval links (the newest lines)
+LOG_MAX = 5 << 20        # tailscaled.log past this at a start: set aside as tailscaled.old.log
 EXPOSE = ("funnel", "serve")   # the CLI commands that publish the away listener: public, or the tailnet only
 _LOCK = threading.RLock()   # "still wanted?" and starting a process happen together, so Off can't be overtaken by a tick
 FETCH_RETRY_S = 600         # a failed download waits this long before the next try (39 MB each: never in a loop)
@@ -114,8 +116,74 @@ def node_name() -> str:
     return n
 
 
+def _pipe_key() -> str:
+    """The state folder's own random key in its pipe's name: made once, kept beside the node's keys (it goes with
+    Forget), read back so a daemon left running is found again."""
+    f = state_dir() / "uc-pipe"
+    try:
+        k = f.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[0-9a-f]{32}", k):
+            return k
+    except OSError:
+        pass
+    k = secrets.token_hex(16)
+    state_dir().mkdir(parents=True, exist_ok=True)
+    from . import fsutil
+    fsutil.write_text(f, k)
+    return k
+
+
 def _socket() -> str:
-    return platform.tailscale_socket(state_dir())
+    return platform.tailscale_socket(state_dir(), _pipe_key())
+
+
+def _end_orphans():
+    """Before a daemon starts: the daemon this state folder last started (its pid kept beside it), if it's still
+    running and is our own tailscaled program, is a leftover (a crash, an update under it). It's ended, so two never
+    share the state folder and none keeps the PC on the tailnet unwatched. Only that one: another copy's daemon has its
+    own state folder and pid."""
+    f = state_dir() / "uc-daemon"
+    try:
+        pid, started = (int(x) for x in f.read_text(encoding="utf-8").split())
+    except (OSError, ValueError):
+        return
+    prog_file = bin_dir() / platform.tailscale_names()[0]
+    mine = _P["daemon"].pid if _P["daemon"] is not None and _P["daemon"].poll() is None else None
+    if CMD or pid in (mine, os.getpid()) or not prog_file.is_file():
+        return
+    try:   # (the same process: its pid, its start time and our program, so never one Windows gave that pid since)
+        same = platform.process_started(pid) == started and platform.process_path(pid)
+    except platform.NotOnThisOS:
+        return
+    if same and os.path.normcase(same) == os.path.normcase(str(prog_file.resolve())):
+        try:
+            os.kill(pid, 15)   # (SIGTERM; Windows ends the process)
+            from .doctor import log
+            log("Your phone: a secure-link piece left running from before was stopped.")
+        except OSError:
+            pass
+
+
+def _keep_pid(p):
+    """The daemon this state folder started: its pid and start time, so the next start can tell a leftover."""
+    from . import fsutil
+    try:
+        started = platform.process_started(p.pid)
+    except platform.NotOnThisOS:
+        started = None
+    try:
+        if started is not None:
+            fsutil.write_text(state_dir() / "uc-daemon", f"{p.pid} {started}")
+    except OSError:
+        pass
+
+
+def _drop_pid():
+    """Our daemon ended cleanly: no record left for a later process Windows gives that pid."""
+    try:
+        (state_dir() / "uc-daemon").unlink()
+    except OSError:
+        pass
 
 
 def _cli(*args, timeout: float = 20) -> str:
@@ -144,11 +212,19 @@ def _daemon_alive() -> bool:
 
 def _start_daemon():
     state_dir().mkdir(parents=True, exist_ok=True)
+    log_file = path("logs_dir") / "tailscaled.log"
+    try:   # (the daemon's own log: the last run's kept beside it once it's past LOG_MAX)
+        if log_file.stat().st_size > LOG_MAX:
+            log_file.replace(log_file.with_name("tailscaled.old.log"))
+    except OSError:
+        pass
+    _end_orphans()
     cmd = _cmd("tailscaled") + ["--tun=userspace-networking", f"--statedir={state_dir()}", f"--socket={_socket()}",
                                 "--port=0", "--no-logs-no-support", *platform.tailscaled_os_args()]
-    with open(path("logs_dir") / "tailscaled.log", "a", encoding="utf-8") as log:   # the daemon keeps its own copy
+    with open(log_file, "a", encoding="utf-8") as log:   # the daemon keeps its own copy
         _P["daemon"] = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                         creationflags=platform.NO_WINDOW)
+    _keep_pid(_P["daemon"])
 
 
 def _run_bg(key: str, args: list):
@@ -156,13 +232,14 @@ def _run_bg(key: str, args: list):
     def go():
         try:
             with _LOCK:
-                if not STATE["want"]:
-                    return
+                if not STATE["want"] or (key in EXPOSE and key != _mode()):   # (Private switched on or off since the
+                    return                                                    # step chose it: the next step chooses again)
                 p = subprocess.Popen(_cmd("tailscale") + [f"--socket={_socket()}", *args], stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, **platform.TEXT, creationflags=platform.NO_WINDOW)
                 _P[key] = p
             for line in p.stdout:
                 _P["out"].append(line)
+                del _P["out"][:-OUT_LINES]
                 m = URL_RX.search(line)
                 if m:
                     STATE["approve_url" if key in EXPOSE else "auth_url"] = m.group(0)
@@ -194,6 +271,8 @@ def _funnel_on(st: dict) -> bool:
     except (ValueError, OSError, subprocess.TimeoutExpired):
         return False
     host = (st.get("Self") or {}).get("DNSName", "").rstrip(".")
+    if not host:   # (no name yet: nothing is published, nothing is ready)
+        return False
     allowed = any(k.startswith(host) and v for k, v in (f.get("AllowFunnel") or {}).items())
     _P["public"] = allowed
     targets = _proxies(f.get("Web") or {})
@@ -331,6 +410,7 @@ def stop():
             pass
     with _LOCK:
         _end_processes()
+    _drop_pid()
 
 
 def at_exit():
@@ -349,6 +429,7 @@ def at_exit():
         q = _P.get(key)
         if q is not None and q.poll() is None:
             q.terminate()   # no wait: this process is about to end, and a closing console has seconds
+    _drop_pid()
 
 
 def forget():

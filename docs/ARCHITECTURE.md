@@ -65,7 +65,8 @@ undercover/
     + the vendored rvc/), gpu (the shared separator and converter), jobs (Job, the GPU worker, SSE events, ETA),
     worklist (Pause / Resume, the overnight queue, registries), cadence/ (engines, client, worker, render), addons,
     youtube, ytdlp (self-healing), doctor, manifest, about, diagnostics, phone, qr, tailnet (the phone's link), themes,
-    ear (thumbs), tray (the recent tray), trayicon (the system tray), gamepause, vault, platform (OS-specific calls)
+    ear (thumbs), tray (the recent tray), trayicon (the system tray), gamepause, vault, platform (OS-specific calls),
+    quiet (two known library warnings kept out of the logs)
   doubleagent/             project, sources, subject, trainer, voicecheck, clipsound, cadence, night (queue items),
                            improved (a retrained voice waiting beside the current one), frozen (the Improve test),
                            service (the public surface), api
@@ -534,7 +535,10 @@ stitched by the plan.
   never split says nothing: nothing is separated just to know. The
   backing has its own plan (`duets.backing_plan`): its phrases are its singing between its own silences, each is sung
   whole by whoever sings most of the lead under it, and its voice changes only inside its own silence, at the point
-  nearest the lead's change.
+  nearest the lead's change. Where a converted backing (a duet's or a backing voice's) is a chord one singer can't
+  follow, 3 s or more with a second line (`f0fix._second_line` over `RIVAL`) on most of its singing, the cover's notes
+  name the times, at most three and then "and N more" (`duets.chord_spans`, `chord_note`, `pipeline._chord_note`, one
+  salience read of the stem); the audio isn't changed.
 - **Too few words** (under 20 heard): there's no chorus to find, and the voices take every two lines in turn.
 - **On the page** (`renderDuet`, `renderDuetPlan` in `app.js`): the second singer is picked from the same voice rows, and
   the Convert bar says the backing in words. The strip is the plan of the newest cover of this song by these two, from the
@@ -708,6 +712,12 @@ numbers, logs, ids, folder links. Elements carry `data-deep`; `body:not(.deep) [
 the top bar and remembered. Nothing is removed, only hidden. New screens are designed basic-first, and the engine's
 judgement is fixed before a setting is added.
 
+**Find a setting** (`web/findset.js`): one box at the top of SafeHouse's Settings, System and Add-ons searches all three and the
+top bar's Low profile and Deep Cover. Each row carries its own find-words in `data-find`, next to it in the markup, so a renamed
+row is still found by its old name; a typed word must start a word of the row's name, small text or find-words. Matches in the
+open room stay in place and the rest fold away; matches elsewhere are listed with Go there. A Deep Cover row is never shown in
+basic view, only counted for a line that offers Deep Cover. Typed text is only ever put into the page as text.
+
 ### Themes
 
 A theme is a grading of the look plus a type change, tokens only (`core/themes.py`, `TOKENS`; the contract is
@@ -720,14 +730,17 @@ runs at import, at save and every time a library theme is served; import and exp
 
 Off until the person sets it up. Since 1.2.1 there is one way in for every phone, at home and away: an HTTPS link,
 `https://<name>.ts.net`, from a hidden userspace Tailscale (`core/tailnet.py`: pinned MSI, hashes checked, no driver,
-no service) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
+no service; its CLI pipe is named after its state folder and a random key kept there, `platform.tailscale_socket`, so
+two copies on one PC never share a daemon; one this folder left running is ended at the next start) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
 never the PC's own listener. Windows-only for now (`platform.supports("away")`). A release can ship without the link's setup (`tailnet.OFFERED`; off in 1.2, the user's
 call): no Set up, no tray item, the link never starts and Forget never starts the daemon; a PC that had it on keeps its home-Wi-Fi phones and is told once
 (web/whatsnew.js). Set up, on the PC, is the switch: it
 fetches the piece, then waits for Tailscale's sign-in and its one approval (`/api/phone`'s `phase`, with the two links,
 which never reach a phone). Turn off the phone link resets Funnel and stops the daemon, so nothing reaches the PC from a
 phone. Private (Deep Cover, `phone.away_private`): Serve instead of Funnel, to the same listener and name, so only
-devices on the person's tailnet reach it. Switching resets the serve config first, so the two are never on together.
+devices on the person's tailnet reach it. Switching resets the serve config first, so the two are never on together, and a publish
+chosen before the switch doesn't run (`_run_bg` checks the mode again). The daemon's log is set aside past 5 MB at a
+start (`tailscaled.old.log`).
 
 Connecting a phone: the card shows a QR code of `https://<name>/pair#<code>`, a 128-bit code in the fragment (never
 sent to a server, taken out of the address bar at once), for five minutes. Wrong claims are counted for the card but

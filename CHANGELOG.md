@@ -14,12 +14,14 @@ in brackets.
   from a phone.
 - A phone can have three jobs waiting or running at a time. Deleting covers, speech, songs and training projects is
   done on the PC.
+- Two copies of UnderCover on one PC each keep their own phone link.
 - Hardening.
 - Hardening of a phone's job count.
 - A phone that isn't used for 30 days is let go: it connects again with a new code. Hardening of the link before a
   phone has connected.
+- Hardening of the phone link's switch between public and private.
 
-**FrontMan** (nobacking, holdparts, residue, notop, firstopen)
+**FrontMan** (nobacking, holdparts, residue, notop, firstopen, chordnote)
 - Under Low profile, opening Shape it for the first time and a duet's verses and choruses hear the words again: the
   speech worker gets the room Whisper needs, then gives it back. A limit too small for it says so.
 - Before Convert, a duet says when a song already split has almost no backing, so you know the second singer has
@@ -28,6 +30,8 @@ in brackets.
   voice stays on the part it was on instead of hopping to the other.
 - In a chorus kept as it is, what's left of the lead under those lines is silent, and the cover's note says who sings
   them. With the top voice moved to the lead, a line with no top voice to move stays where it was.
+- When a converted backing is a chord of several voices, the cover's note names the times, since one singer may waver
+  there.
 
 **Installer** (xttssize)
 - Ticking the XTTS-v2 add-on counts its 2 GB in the space setup checks for.
@@ -65,8 +69,17 @@ in brackets.
 - In Deep Cover, away from home can be private: only devices signed in to your Tailscale reach it, with nothing on
   the public internet.
 
+**Fixes** (quietdrops)
+- The server's log keeps real problems only: a closed tab or a dropped connection no longer leaves an error there.
+**Fixes** (plainerr2)
+- A full disk, the PC running out of memory and no internet connection each say what to do, instead of "Something went wrong".
+
 **Fixes** (tidy1)
 - A file that only looks like a song (nothing in it plays) is refused with a plain message.
+
+**Fixes** (bodyclose)
+- An upload that drops while UnderCover's files are being moved says so, instead of saying contact was lost.
+- Hardening of how the server answers an upload it refuses.
 
 ## 1.1.3 (2026-10-29)
 

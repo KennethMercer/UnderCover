@@ -153,11 +153,12 @@
         <div class="ex" id="os-ex"><button type="button">Pink Pony Club as Plankton</button><button type="button">Freek-a-Leek as Obama</button><button type="button">Hello by Adele as Peter Griffin</button></div>
         <label class="toggle" id="os-train-row" data-deep><input type="checkbox" id="os-train" aria-label="Prefer training a new voice"><span>Prefer training a new voice<small class="meta" id="os-train-eta"></small></span></label>
       </div>
-      <p class="meta" id="os-plan">Name a song and a voice. UnderCover finds the song, finds or trains the voice, and does the rest.</p>
+      <!-- the plan line and the way to set it up by hand read as one line while idle; oneshot.js rewrites #os-plan, never its sibling -->
+      <div class="os-line"><p class="meta" id="os-plan">Name a song and a voice, and UnderCover does the rest.</p>
+        <p class="meta os-else">Your own file or exact settings? <button class="linkbtn" id="build-toggle" type="button" aria-expanded="false" aria-controls="build">Set it up yourself &#8250;</button></p></div>
       <div class="first-ready" id="first-ready" hidden><p>Downloading missing AI models, <span id="first-ready-size">about 1.3 GB</span>.</p>
         <div class="bar indet" id="first-ready-bar"><i></i></div></div>
       <div id="auto-choices" hidden></div>
-      <div class="os-foot"><button class="linkbtn quiet" id="build-toggle" type="button" aria-expanded="false" aria-controls="build">or set it up yourself &#8250;</button></div>
     </div>
     <div id="os-running" hidden>
       <div class="plan">
@@ -690,21 +691,21 @@
     <div class="alert" id="sys-alert" hidden><div><b>No graphics card available</b><p id="sys-alert-p"></p></div>
       <div class="alert-btns"><button class="btn" type="button" data-restart data-pc>Restart UnderCover</button></div></div>
     <div class="rn-list">
-      <div class="sys"><span><b>Graphics card</b><small id="sys-gpu">Checking…</small></span><span class="dotw now" id="sys-gpu-st">checking</span></div>
-      <div class="sys"><span><b>Models</b><small id="sys-models">Loading…</small></span><span class="dotw now" id="sys-models-st">loading</span></div>
-      <div class="sys"><span><b>YouTube downloader</b><small>Finds songs and clips. YouTube changes often; an update usually fixes downloads that start failing.</small>
+      <div class="sys" data-find="gpu, video card, vram, memory, amd, nvidia, radeon, driver"><span><b>Graphics card</b><small id="sys-gpu">Checking…</small></span><span class="dotw now" id="sys-gpu-st">checking</span></div>
+      <div class="sys" data-find="engines, ai, models, warm, loading"><span><b>Models</b><small id="sys-models">Loading…</small></span><span class="dotw now" id="sys-models-st">loading</span></div>
+      <div class="sys" data-find="youtube, yt-dlp, ytdlp, download, downloads failing, update, check for a fix"><span><b>YouTube downloader</b><small>Finds songs and clips. YouTube changes often; an update usually fixes downloads that start failing.</small>
         <small id="lib-ytdlp-st"></small><span class="kv2" id="lib-ytdlp" data-deep></span>
         <label class="check" data-deep data-pc><input type="checkbox" id="lib-ytdlp-auto"><span>Update by itself when YouTube starts refusing videos</span></label></span>
         <button class="btn" id="lib-ytdlp-go" type="button" data-pc>Check for a fix</button></div>
-      <div class="sys" id="sys-about"><span><b>UnderCover</b><small id="sys-version">…</small><span class="kv2" id="sys-about-deep" data-deep></span></span>
+      <div class="sys" id="sys-about" data-find="version, about, update, release, logs"><span><b>UnderCover</b><small id="sys-version">…</small><span class="kv2" id="sys-about-deep" data-deep></span></span>
         <button class="linkbtn" id="sys-logs" type="button" data-deep data-pc>Open logs</button></div>
     </div>
-    <section class="rn-sec" id="sys-news">
+    <section class="rn-sec" id="sys-news" data-find="changes, changelog, release notes, updates, new">
       <div class="rn-lbl"><b>What's new</b><small>What each update changed, newest first.</small></div>
       <div class="rn-list" id="sys-news-list"></div>
       <button class="linkbtn" id="sys-news-more" type="button" hidden></button>
     </section>
-    <section class="rn-sec" id="sys-sweep">
+    <section class="rn-sec" id="sys-sweep" data-find="doctor, fix, repair, broken, problem, not working, check, diagnostics">
       <div class="rn-lbl"><b>Sweep</b><small id="sys-doctor-sum">The Doctor checks UnderCover's own parts and fixes the safe things. It never touches your songs, voices, covers or speech.</small></div>
       <div class="rn-list" id="sys-doctor"></div>
       <div class="row"><button class="btn" id="sys-doctor-full" type="button">Check everything</button>
@@ -719,34 +720,41 @@
           <button class="linkbtn" id="sys-bundle-cancel" type="button">Cancel</button></div>
       </div>
     </section>
-    <div class="row sys-btns" data-pc><button class="btn" type="button" data-restart>Restart UnderCover</button>
+    <div class="row sys-btns" data-pc data-find-name="Restart or quit" data-find="restart, quit, stop, close, exit, shut down, start again"><button class="btn" type="button" data-restart>Restart UnderCover</button>
       <button class="btn danger" id="lib-quit" type="button" title="Stops UnderCover on this PC (started by double-click, it has no window to close)">Quit UnderCover</button>
       <span class="meta">Quit stops it on this PC; start it again with UnderCover.bat.</span></div>
     </div>
 
     <div class="sh-room" id="room-settings" hidden>
     <div class="roomhead"><h3>Settings</h3><p>The few things UnderCover lets you change about itself.</p></div>
+    <!-- Find a setting (findset.js): one box for Settings, System and Add-ons, moved to the top of the open room; every row of the three
+         carries its find-words in data-find (its name and small text count too) -->
+    <div class="sf" id="sh-find-wrap" role="search">
+      <div class="sfield sf-box"><svg class="ico" aria-hidden="true"><use href="#g-search"/></svg><input id="sh-find" type="search" autocomplete="off" spellcheck="false" placeholder="Find a setting" aria-label="Find a setting in SafeHouse"><button class="sf-x" id="sh-find-x" type="button" aria-label="Clear" hidden>×</button></div>
+      <p class="meta sf-n" id="sh-find-n" role="status" hidden></p>
+    </div>
+    <div class="sf-more" id="sh-find-more"></div>
     <div class="rn-list">
-      <div class="setting"><span><b>Look</b><small>Follow Windows, or pick one.</small></span>
+      <div class="setting" data-find="dark mode, light mode, night, colours, colors, appearance, brightness"><span><b>Look</b><small>Follow Windows, or pick one.</small></span>
         <span class="seg" id="set-look" role="group" aria-label="Look"><button type="button" data-v="system" aria-pressed="true">Follow Windows</button><button type="button" data-v="dark" aria-pressed="false">Dark</button><button type="button" data-v="light" aria-pressed="false">Light</button></span></div>
-      <div class="setting"><span><b>Deep Cover</b><small>Shows every number, score, setting and log. The glasses in the top bar switch it too.</small></span>
+      <div class="setting" data-find="expert, advanced, details, numbers, logs, glasses, pro"><span><b>Deep Cover</b><small>Shows every number, score, setting and log. The glasses in the top bar switch it too.</small></span>
         <button class="switch" id="set-deep" type="button" role="switch" aria-checked="false" aria-label="Deep Cover"></button></div>
-      <div class="setting" id="set-theme-row" data-deep><span><b>Theme</b><small>A grading of the look and its type. A theme is one file you can share: a friend's comes in through Import.</small></span>
+      <div class="setting" id="set-theme-row" data-deep data-find="colours, colors, fonts, type, skin, import, export, make your own"><span><b>Theme</b><small>A grading of the look and its type. A theme is one file you can share: a friend's comes in through Import.</small></span>
         <span class="row set-theme-btns"><button class="btn" id="set-theme-make" type="button">Make one…</button><button class="btn" id="set-theme-import" type="button">Import…</button>
           <a class="linkbtn" id="set-theme-export" href="#" download hidden>Export</a><button class="linkbtn" id="set-theme-remove" type="button" hidden>Remove</button>
           <input type="file" id="set-theme-file" accept=".uctheme,.zip" hidden></span>
         <div class="theme-cards" id="set-themes"></div>
         <div class="theme-maker" id="theme-maker" hidden></div></div>
-      <div class="setting" id="set-tour-row"><span><b>First assignment</b><small>The four-step tour: a first cover, keeping it, SafeHouse, and starting a voice of your own.</small></span>
+      <div class="setting" id="set-tour-row" data-find="tour, tutorial, help, guide, start over, how to, getting started"><span><b>First assignment</b><small>The four-step tour: a first cover, keeping it, SafeHouse, and starting a voice of your own.</small></span>
         <button class="btn" id="set-tour-replay" type="button">Replay</button></div>
-      <div class="setting" id="set-ear-row" hidden><span><b>Your ear</b><small id="set-ear-say"></small></span>
+      <div class="setting" id="set-ear-row" hidden data-find="thumbs, likes, ratings, taste, favourites, favorites, forget thumbs"><span><b>Your ear</b><small id="set-ear-say"></small></span>
         <button class="linkbtn quiet" id="set-ear-forget" type="button" data-pc hidden>Forget my thumbs</button>
         <div class="ear-deep" id="set-ear-deep" data-deep></div></div>
       <!-- Your phone (1.2.1, one link): the look chat's hooks are #phone-step, #phone-asks, #phone-pairing, #phone-devices,
            #phone-link and the footer's link buttons; app/phone_api.state() is what it shows -->
-      <div class="setting" id="set-phone-row" data-pc><span><b>Your phone</b><small id="set-phone-say">Use UnderCover on your phone, at home or anywhere.</small></span>
+      <div class="setting" id="set-phone-row" data-pc data-find="away from home, away, remote, outside, mobile, android, iphone, tailscale, phone link, qr, pair, connect, link"><span><b>Your phone</b><small id="set-phone-say">Use UnderCover from your phone, at home or away. One link works for both.</small></span>
         <button class="btn" id="phone-setup" type="button">Set up</button></div>
-      <div class="phone-box" id="phone-box" hidden data-pc>
+      <div class="phone-box" id="phone-box" hidden data-pc data-find-with="set-phone-row">
         <p class="meta" id="phone-step" hidden></p>
         <div class="row"><a class="btn" id="phone-signin" target="_blank" rel="noopener noreferrer" hidden>Sign in</a><a class="btn" id="phone-approve" target="_blank" rel="noopener noreferrer" hidden>Approve</a></div>
         <p class="meta" id="phone-ct" data-deep hidden>Approving lists this PC's link name (a random uc-… name, nothing about you) in the public certificate logs every HTTPS site appears in.</p>
@@ -762,11 +770,11 @@
         <div class="rn-list" id="phone-devices"></div>
         <p class="meta" id="phone-link" hidden></p>
         <div class="rn-list" id="phone-checks"></div>
-        <div class="setting" data-deep id="set-away-private-row"><span><b>Private: my phone runs Tailscale</b><small>Only devices signed in to your Tailscale reach UnderCover, and nothing is on the public internet. The phone needs the Tailscale app, signed in to the same account. Off: a public link that only your connected phones can use, with nothing to install.</small></span>
+        <div class="setting" data-deep id="set-away-private-row" data-find="tailscale, vpn, private, serve, tailnet"><span><b>Private: my phone runs Tailscale</b><small>Only devices signed in to your Tailscale reach UnderCover, and nothing is on the public internet. The phone needs the Tailscale app, signed in to the same account. Off: a public link that only your connected phones can use, with nothing to install.</small></span>
           <button class="switch" id="set-away-private" type="button" role="switch" aria-checked="false" aria-label="Private: my phone runs Tailscale"></button></div>
         <p class="meta phone-foot"><button class="linkbtn" id="phone-off" type="button">Turn off the phone link</button><span id="phone-all-wrap" hidden> · <button class="linkbtn" id="phone-all" type="button">Remove all phones</button></span><span data-deep> · <button class="linkbtn" id="away-forget" type="button">Forget this PC's Tailscale sign-in</button></span></p>
       </div>
-      <div class="setting" data-phone><span><b>Your phone</b><small id="set-phone-me">This phone is connected. Your phone is managed on the PC.</small></span></div>
+      <div class="setting" data-phone data-find="away from home, away, remote, outside, mobile, android, iphone, tailscale, phone link, qr, pair, connect, link"><span><b>Your phone</b><small id="set-phone-me">This phone is connected. Phones are added and removed on the PC.</small></span></div>
     </div>
     </div>
 
@@ -878,6 +886,7 @@
 <script src="/static/oneshot.js"></script>
 <script src="/static/library.js"></script>
 <script src="/static/rooms.js"></script>
+<script src="/static/findset.js"></script>
 <script src="/static/vault.js"></script>
 <script src="/static/smaller.js"></script>
 <script src="/static/aside.js"></script>

@@ -376,19 +376,29 @@ function speechDetail(d, x) {
   confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/library/speech/${x.id}`, { method: "DELETE" }); showError("That speech is deleted.", "Deleted", null, true); afterChange(); });
 }
 
+// a link as a person reads it: host and the path's start, the rest in the href and the title ("youtube.com/watch?v=…")
+function shortUrl(url) {
+  try {
+    const u = new URL(url), path = u.pathname.length > 28 ? u.pathname.slice(0, 27) + "…" : u.pathname;
+    return u.host.replace(/^www\./, "") + (path === "/" ? "" : path) + (u.search ? u.search.slice(0, u.search.indexOf("=") + 1 || 2) + "…" : "");
+  } catch (e) { return url; }
+}
+// a song (bones wave 2, the user 2026-11-08): what it is, its covers and size, one line on its separation; the stems themselves are
+// Deep Cover's, in one closed disclosure with their own Delete
 function songDetail(d, s) {
-  d.innerHTML = `<div class="dhead">${art(s.title, true)}<div style="min-width:0"><h3>${esc(s.title)}</h3>${facts([sourceWord(s.source), s.duration ? fmtTime(s.duration) : "", s.sample_rate ? { t: `${(s.sample_rate / 1000).toFixed(1)} kHz ${s.channels === 1 ? "mono" : "stereo"}`, deep: true } : "",
+  const has = s.stems.length > 0;
+  d.innerHTML = `<div class="dhead">${art(s.title, true)}<div style="min-width:0"><h3>${esc(s.title)}</h3>${facts([sourceWord(s.source), s.duration ? fmtTime(s.duration) : "",
+      has ? { t: "Ready to cover", cls: "ready" } : "", s.sample_rate ? { t: `${(s.sample_rate / 1000).toFixed(1)} kHz ${s.channels === 1 ? "mono" : "stereo"}`, deep: true } : "",
       s.key ? { t: `Key ${s.key}`, deep: true } : ""])}</div></div>
     ${s.url ? playerHtml() : ""}
-    <h2>Stems</h2>
-    ${s.stems.length ? `<div class="stems">${s.stems.map((t, i) => `<div class="stem"><button class="tplay" data-i="${i}" aria-label="Play ${esc(t.label)}" aria-pressed="false">▶</button><span>${esc(t.label)}${t.quality !== "high" ? ` <span class="meta">(${t.quality})</span>` : ""}</span><span class="meta mono">${gb(t.size)}</span><a class="linkbtn" href="${t.url}?download">Download</a></div>`).join("")}</div>
-      <p class="meta">${s.stems_old_model ? "Made with an older separation model; deleting them means the next cover separates again with the current one." : "Kept so new covers of this song skip separation."}</p>`
-      : `<p class="meta">Not separated yet. The next cover of this song does it (about a minute).</p>`}
     <dl class="kv">${s.sample ? `<dt>Sample</dt><dd>UnderCover's sample song${s.artist ? ` · ${esc(s.artist)}` : ""}</dd>` : ""}<dt>Covers</dt><dd>${s.covers ? s.cover_titles.map(esc).join("<br>") : "none yet"}</dd>
-      <dt>Size</dt><dd>${gb(s.size)} song${s.stems_size ? ` + ${gb(s.stems_size)} stems` : ""}</dd>
-      ${s.source_url ? `<dt>From</dt><dd><a class="linkbtn" href="${esc(s.source_url)}" target="_blank" rel="noopener">${esc(s.source_url)}</a></dd>` : ""}</dl>
-    <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button>
-      ${s.stems.length ? `<button class="btn" id="lib-del-stems" data-pc>Delete stems only…</button>` : ""}<button class="btn danger" id="lib-del" data-pc>Delete song…</button></div>`;
+      <dt>Size</dt><dd>${gb(s.size + (s.stems_size || 0))}${s.stems_size ? ", with its working files" : ""}</dd>
+      ${s.source_url ? `<dt>From</dt><dd><a class="linkbtn" href="${esc(s.source_url)}" target="_blank" rel="noopener" title="${esc(s.source_url)}">${esc(shortUrl(s.source_url))}</a></dd>` : ""}</dl>
+    <p class="meta">${!has ? "Not separated yet. The next cover of this song does it (about a minute)." : s.stems_old_model ? "Made with an older separation model; deleting them means the next cover separates again with the current one." : "Separated already, so a new cover of it skips that minute."}</p>
+    ${has ? `<details class="stems-box" data-deep><summary>Stems · ${s.stems.length} file${s.stems.length === 1 ? "" : "s"} · ${gb(s.stems_size || 0)} <span class="deepmark">Deep Cover</span></summary>
+      <div class="stems">${s.stems.map((t, i) => `<div class="stem"><button class="tplay" data-i="${i}" aria-label="Play ${esc(t.label)}" aria-pressed="false">▶</button><span>${esc(t.label)}${t.quality !== "high" ? ` <span class="meta">(${t.quality})</span>` : ""}</span><span class="meta mono">${gb(t.size)}</span><a class="linkbtn" href="${t.url}?download">Download</a></div>`).join("")}</div>
+      <div class="row"><button class="btn" id="lib-del-stems" data-pc>Delete stems only…</button></div></details>` : ""}
+    <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn danger" id="lib-del" data-pc>Delete song…</button></div>`;
   if (s.url) wirePlayer(s.url);
   $$("#lib-detail .stem .tplay").forEach(b => b.onclick = () => {
     const t = s.stems[+b.dataset.i];
