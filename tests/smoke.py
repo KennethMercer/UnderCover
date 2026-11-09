@@ -2351,6 +2351,108 @@ def u_phone_stream():
     return "Remove, Off and the move each end the phone's stream at once; another phone's and the PC's go on"
 
 
+@check("A phone's jobs hold to its cap at the same moment too: ten at once from one phone start three; a job made and never queued stops counting; a voice's preview waits once however often it's renamed, with the newest name; Allow counts the phones already connected")
+def u_phone_jobs_burst():
+    import inspect, queue, threading
+    from types import SimpleNamespace
+    from undercover.core import jobs, phone, voicepreview
+    from undercover.core.phone import PhoneError
+    saved = dict(jobs.JOBS)
+    jobs.JOBS.clear()
+    jobs._MADE.clear()
+    got, refused = [], []
+    go = threading.Barrier(10)
+
+    def one(n):
+        jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "burst", "name": "p"})
+        try:
+            go.wait(10)
+            j = jobs.Job("cover", title=f"t{n}")
+            time.sleep(0.2)   # (the route's own work between making the job and queueing it)
+            jobs.JOBS[j.id] = j
+            got.append(j)
+        except jobs.TooManyJobs:
+            refused.append(n)
+        finally:
+            jobs.ORIGIN.h = None
+    try:
+        ts = [threading.Thread(target=one, args=(n,)) for n in range(10)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(30)
+        assert len(got) == jobs.PHONE_JOBS and len(refused) == 10 - jobs.PHONE_JOBS, (len(got), refused)
+        assert not jobs._MADE, "a queued job is still counted twice"
+        src = inspect.getsource(jobs.Job.__init__)
+        assert src.index('self.state = "queued"') < src.index("_phone_cap(self)"), "a job is counted before it has a state"
+        for j in got:
+            j.finish("done", message="Finished")
+        jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "burst", "name": "p"})
+        lost = [jobs.Job("cover", title="never queued") for _ in range(jobs.PHONE_JOBS)]   # (their routes failed after)
+        try:
+            jobs.Job("cover", title="t")
+            raise AssertionError("made-but-not-queued jobs didn't count")
+        except jobs.TooManyJobs:
+            pass
+        for j in lost:
+            j.created -= jobs.MADE_S + 1
+        assert jobs.Job("cover", title="t").device == "burst", "a job never queued kept counting"
+        jobs.ORIGIN.h = None
+        jobs.JOBS.update({"x1": got[0]})   # (update lands through the same door)
+        assert isinstance(jobs.JOBS, jobs._Jobs)
+
+        real_q, q = jobs.GPU_QUEUE, queue.Queue()   # a voice's preview: renamed three times before it starts
+        jobs.GPU_QUEUE = q
+        try:
+            v = [SimpleNamespace(name="smoke-pv", dir=Path("smoke-pv"), display=f"Name {n}") for n in range(3)]
+            first = voicepreview.queue_job(v[0])
+            assert voicepreview.queue_job(v[1]) is first and voicepreview.queue_job(v[2], force=False) is first
+            assert q.qsize() == 1 and first.title == "Preview line for Name 2" and first.pv is v[2] and first.force
+            made = []
+            real_make = voicepreview.make
+            voicepreview.make = lambda vv, j, force: made.append(vv.display) or True
+            real_timer = threading.Timer
+            threading.Timer = lambda s, fn: SimpleNamespace(start=lambda: made.append(("gone", s)))
+            try:
+                job, run = q.get_nowait()
+                run(job)
+            finally:
+                voicepreview.make, threading.Timer = real_make, real_timer
+            assert made == ["Name 2", ("gone", 120)] and job.state == "done", made
+            again = voicepreview.queue_job(v[0])   # (started: a new ask is a new job)
+            assert again is not first and q.qsize() == 1
+        finally:
+            jobs.GPU_QUEUE = real_q
+            voicepreview._QUEUED.clear()
+    finally:
+        jobs.ORIGIN.h = None
+        jobs.JOBS.clear()
+        jobs._MADE.clear()
+        jobs.JOBS.update(saved)
+    with isolated_data():   # Allow counts the phones already connected (asks from windows opened one after another)
+        phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        was = phone.MAX_DEVICES
+        phone.MAX_DEVICES = 1
+        try:
+            phone.set_enabled(True)
+            asks = []
+            for name in ("A", "B"):
+                phone.new_pairing()
+                asks.append(phone.claim(phone.PAIRING["code"], name)[1])
+            phone.allow(asks[0]["id"])
+            try:
+                phone.allow(asks[1]["id"])
+                raise AssertionError("Allow went past the phones a PC may have")
+            except PhoneError as e:
+                assert e.status == 409 and "connected already" in str(e)
+            assert len(phone.devices()) == 1 and [x["id"] for x in phone.pending()] == [asks[1]["id"]]
+        finally:
+            phone.MAX_DEVICES = was
+            phone.set_enabled(False)
+    return "ten at once: three; never-queued jobs stop counting; one preview per voice, newest name; Allow counts"
+
+
 @check("Your phone's records hold up (1.2.1, review): an ask never allowed runs out while the server runs; No on a phone that isn't waiting leaves it; a full list keeps the code; an unreadable phone.json is never saved over; UnderCover's own warm-up and preview jobs don't count against a phone; the card doesn't redraw what hasn't changed; the pages keep waiting through a blip")
 def u_phone_records():
     from types import SimpleNamespace
@@ -15835,7 +15937,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
