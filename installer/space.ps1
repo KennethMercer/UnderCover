@@ -6,13 +6,17 @@
   The sizes are measured (installer\sizes.json) and the margin (20 %) is added on top. What counts:
     - the install folder: the app, Python and PyTorch for the graphics card, and uv's download cache (it stays: a
       repair or a re-run reuses it);
-    - the models folder: the AI models UnderCover fetches the first time each feature is used (and any add-ons);
+    - the models folder: the AI models, which setup downloads (and any add-ons);
     - the library and the working files: room to start with (they grow with use).
+  A folder left at the install folder (the files page's default: "change nothing") is counted where config.toml's
+  [paths] already keeps it (an update after SafeHouse's Storage moved the models or the library to another drive), so
+  an update isn't asked for room on a drive it won't use.
 
   As a command (the wizard):
     powershell -File space.ps1 -Out <file> -InstallDir <dir> [-LibraryDir ..] [-WorkDir ..] [-ModelsDir ..]
                                [-Backend auto|rocm|cuda128|cuda126|cpu] [-Addons f5,...]
   writes lines:  backend|<backend>
+                 nodriver|<detect_gpu's reason>   (only when an NVIDIA card is there but its driver isn't working)
                  total|<GB>
                  need|<one short line per drive: "UnderCover needs about 22 GB on D: (188 GB free).">
                  parts|App 9 GB|AI models 10.5 GB|your files 2.5 GB   (the wizard joins them with a middle dot)
@@ -53,19 +57,66 @@ function Get-DirBytes([string]$Dir) {
 }
 
 # what an earlier (or cancelled) setup already put in a folder, in GB, so a re-run or a reinstall isn't asked for room
-# it already uses. $Kind: 'setup' (the install folder's .venv, tools and uv's cache) or 'models' (the models folder in it)
+# it already uses. $Kind: 'setup' (the install folder's .venv, tools and uv's cache), 'models' (the models folder in it)
+# or 'models-at' ($Dir is the models folder itself: where config.toml keeps it)
 function Get-HaveGB([string]$Kind, [string]$Dir) {
     if (-not $Dir) { return 0 }
-    $subs = if ($Kind -eq 'setup') { @('.venv', 'tools', (Join-Path 'cache' 'uv')) } else { @('models') }
+    $subs = if ($Kind -eq 'setup') { @('.venv', 'tools', (Join-Path 'cache' 'uv')) } elseif ($Kind -eq 'models-at') { @('.') } else { @('models') }
     $n = [long]0
     foreach ($s in $subs) { $n += Get-DirBytes (Join-Path $Dir $s) }
     return $n / 1GB
 }
 
+# a TOML basic string's escapes: \\ \" \n \t, and \uXXXX / \UXXXXXXXX (Storage and config set write paths with
+# json.dumps, which writes every letter outside ASCII, an accent included, as \uXXXX)
+function Convert-TomlBasic([string]$s) {
+    [regex]::Replace($s, '\\(u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)', [Text.RegularExpressions.MatchEvaluator] {
+        param($m)
+        $e = $m.Groups[1].Value
+        if ($e.Length -eq 5 -and $e[0] -ceq 'u') { return [string][char][Convert]::ToInt32($e.Substring(1), 16) }
+        if ($e.Length -eq 9 -and $e[0] -ceq 'U') { return [char]::ConvertFromUtf32([Convert]::ToInt32($e.Substring(1), 16)) }
+        if ($e -ceq 'n') { return "`n" }
+        if ($e -ceq 't') { return "`t" }
+        return $e
+    })
+}
+
+# config.toml's [paths] in an install folder (setup and SafeHouse's Storage write them), as full paths: @{ key = path }.
+# Both TOML string forms: "basic" (escaped backslashes) and 'literal' (as written), as the uninstaller's KeptPath reads
+# them; a relative path ("models/voices") is under the install folder. No file, or nothing readable: empty.
+function Read-KeptPaths([string]$InstallDir) {
+    $out = @{}
+    if (-not $InstallDir) { return $out }
+    $f = Join-Path $InstallDir 'config.toml'
+    try { if (-not (Test-Path -LiteralPath $f)) { return $out }; $lines = [IO.File]::ReadAllLines($f) } catch { return $out }
+    $section = ''
+    foreach ($l in $lines) {
+        $s = $l.Trim()
+        if ($s -match '^\[([^\]]+)\]') { $section = $Matches[1].Trim(); continue }
+        if ($section -ne 'paths') { continue }
+        $m = [regex]::Match($s, '^([A-Za-z0-9_]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|''([^'']*)'')')
+        if (-not $m.Success) { continue }
+        $v = if ($m.Groups[2].Success) { Convert-TomlBasic $m.Groups[2].Value } else { $m.Groups[3].Value }
+        if (-not $v) { continue }
+        try {
+            if (-not [IO.Path]::IsPathRooted($v)) { $v = Join-Path $InstallDir $v }
+            $out[$m.Groups[1].Value] = [IO.Path]::GetFullPath($v)
+        } catch { }
+    }
+    return $out
+}
+
+function Test-SpSameDir([string]$a, [string]$b) {
+    if (-not $a) { return $true }
+    try { return ([IO.Path]::GetFullPath($a).TrimEnd('\', '/') -ieq [IO.Path]::GetFullPath($b).TrimEnd('\', '/')) } catch { return $false }
+}
+
 function Get-SpaceNeeds([string]$InstallDir, [string]$LibraryDir, [string]$WorkDir, [string]$ModelsDir,
-                        [string]$Backend, $Sizes, [string[]]$Addons = @(), [switch]$SetupOnly, [scriptblock]$Have = $null) {
+                        [string]$Backend, $Sizes, [string[]]$Addons = @(), [switch]$SetupOnly, [scriptblock]$Have = $null,
+                        [hashtable]$Kept = @{}) {
     # -> [ordered]@{ "<drive root>" = @{ need = GB with the margin; items = @( @{ what; gb } ) } }
     # $Have: { param($kind, $dir) GB already there } (Get-HaveGB; tests stub it); what's there is taken off its part
+    # $Kept: Read-KeptPaths of the install folder; a group left at the install folder is counted where it already is
     $python = $Sizes.python.$Backend
     if (-not $python) { $python = ($Sizes.python.PSObject.Properties | ForEach-Object { $_.Value } | Measure-Object -Maximum).Maximum }
     $addonGb = 0.0
@@ -73,14 +124,22 @@ function Get-SpaceNeeds([string]$InstallDir, [string]$LibraryDir, [string]$WorkD
     $setupHave = if ($Have) { [double](& $Have 'setup' $InstallDir) } else { 0.0 }
     $parts = @(@{ dir = $InstallDir; gb = [math]::Max([double]0, [double]($Sizes.app_gb + $Sizes.tools_gb + $python - $setupHave)); what = 'the app, Python and PyTorch'; short = 'App' })
     # the AI models: setup downloads them (rc-fix4b), so setup's own check counts them too
-    $mdir = if ($ModelsDir) { $ModelsDir } else { $InstallDir }
-    $modelsHave = if ($Have) { [double](& $Have 'models' $mdir) } else { 0.0 }
+    if (-not $Kept) { $Kept = @{} }
+    if ((Test-SpSameDir $ModelsDir $InstallDir) -and $Kept['models_dir']) {   # the models stay where Storage moved them
+        $mdir = $Kept['models_dir']
+        $modelsHave = if ($Have) { [double](& $Have 'models-at' $mdir) } else { 0.0 }
+    } else {
+        $mdir = if ($ModelsDir) { $ModelsDir } else { $InstallDir }
+        $modelsHave = if ($Have) { [double](& $Have 'models' $mdir) } else { 0.0 }
+    }
     $parts += @{ dir = $mdir; gb = [math]::Max([double]0, [double]($Sizes.models_gb + $addonGb - $modelsHave))
                  what = 'the AI models, which setup downloads'; short = 'AI models' }
     if (-not $SetupOnly) {
-        $parts += @{ dir = $(if ($LibraryDir) { $LibraryDir } else { $InstallDir }); gb = $Sizes.library_gb
+        $ldir = if (-not (Test-SpSameDir $LibraryDir $InstallDir)) { $LibraryDir } elseif ($Kept['uploads_dir']) { $Kept['uploads_dir'] } else { $InstallDir }
+        $wdir = if (-not (Test-SpSameDir $WorkDir $InstallDir)) { $WorkDir } elseif ($Kept['cache_dir']) { $Kept['cache_dir'] } else { $InstallDir }
+        $parts += @{ dir = $ldir; gb = $Sizes.library_gb
                      what = 'your songs, covers and voices to start with'; short = 'your files' }
-        $parts += @{ dir = $(if ($WorkDir) { $WorkDir } else { $InstallDir }); gb = $Sizes.work_gb; what = 'working files to start with'; short = 'your files' }
+        $parts += @{ dir = $wdir; gb = $Sizes.work_gb; what = 'working files to start with'; short = 'your files' }
     }
     $out = [ordered]@{}
     foreach ($p in $parts) {
@@ -140,16 +199,23 @@ function Format-Parts($Needs) {
 if ($SpOut) {
     $here = $PSScriptRoot
     $sizes = Read-Sizes $here
+    $noDriver = ''
     if ($SpBackend -eq 'auto') {
-        try { $SpBackend = (& (Join-Path $here 'detect_gpu.ps1') | Out-String | ConvertFrom-Json).backend }
+        try {
+            $seen = & (Join-Path $here 'detect_gpu.ps1') | Out-String | ConvertFrom-Json
+            $SpBackend = $seen.backend
+            if ($seen.nodriver) { $noDriver = "$($seen.reason)" }
+        }
         catch { $SpBackend = '' }   # unknown: the largest download is used (an overestimate, never an underestimate)
     }
     $needs = Get-SpaceNeeds $SpInstallDir $SpLibraryDir $SpWorkDir $SpModelsDir $SpBackend $sizes @($SpAddons -split ',' | Where-Object { $_ }) `
-                            -Have { param($k, $d) Get-HaveGB $k $d }
+                            -Have { param($k, $d) Get-HaveGB $k $d } -Kept (Read-KeptPaths $SpInstallDir)
     $free = { param($r) Get-FreeGB $r }
     $total = 0.0
     foreach ($k in $needs.Keys) { $total += $needs[$k].need }
-    $lines = @("backend|$SpBackend", "total|$(Format-GB $total)")
+    $lines = @("backend|$SpBackend")
+    if ($noDriver) { $lines += "nodriver|$noDriver" }
+    $lines += "total|$(Format-GB $total)"
     foreach ($l in (Format-NeedLines $needs $free)) { $lines += "need|$l" }
     $parts = @(Format-Parts $needs)
     if ($parts.Count) { $lines += "parts|" + ($parts -join '|') }

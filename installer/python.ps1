@@ -1,13 +1,14 @@
 <#
   The installer's own Python, private to this install (dot-sourced by setup.ps1; tests/smoke.py runs the finder on
-  folders of its own). uv installs it into tools\python with --no-bin (no python.exe shim in %USERPROFILE%\.local\bin)
-  and --no-registry (nothing under HKCU\Software\Python).
+  folders of its own). Setup unpacks it itself (step 3, Windows' own tar.exe) from the pinned python-build-standalone
+  archive, the one uv would install, into tools\python\cpython-<version>-windows-x86_64-none: no python.exe shim in
+  %USERPROFILE%\.local\bin, nothing under HKCU\Software\Python, and no "minor version" link. uv only installs the
+  packages.
 
-  uv also makes a "minor version" link beside the install (cpython-3.12-..., a directory junction). Windows can refuse
-  a junction made without admin rights ("untrusted mount point", os error 448: the user's 1.0 installer test), and uv
-  then exits with an error although the full install is there. So setup finds the full-version folder itself
-  (cpython-3.12.10-...), checks that its python.exe runs and is that version, and makes the venv from it: never the
-  link.
+  Why not uv's own Python install (before 1.0): uv makes a minor-version link beside the install (cpython-3.12-..., a
+  directory junction), and Windows can refuse a junction made without admin rights ("untrusted mount point", os error
+  448: the user's 1.0 installer test). The functions here still find the full-version folder only (cpython-3.12.10-...),
+  check that its python.exe runs and is that version, and make the venv from it: never a link.
 #>
 
 function Get-OwnPython([string]$InstallDir, [string]$Version) {

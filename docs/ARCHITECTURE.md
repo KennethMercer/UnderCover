@@ -665,7 +665,8 @@ an installed copy says the Start menu; a source checkout's `scripts\UnderCover.b
 
 The First assignment (1.1) is a spotlight tour on a fresh install's first visit to FrontMan (`firstrun.js`): the page dims, the
 control in question is cut out and lit, one card sits beside it in the dark (never over it). Four steps: the one-shot line
-(with a one-press "Hold On as Agent Smoke", the sample song in the demo voice); listen and Send to SafeHouse; the SafeHouse tab,
+(with a one-press "Hold On as Agent Smoke", the sample song in the demo voice, its time the one-shot plan's own for this
+PC, asked only while the sample song is in the library); listen and Send to SafeHouse; the SafeHouse tab,
 then the kept cover in the Library; DoubleAgent's "Who should it sound like?". Doing the thing moves it on; Next only where
 there's nothing to do. While the first cover is made the page stays dark: the app's own progress (the running strip, the
 one-shot's steps) is lit but can't be pressed, and a panel says what the job is doing in its own words with a tip every ten
@@ -884,10 +885,11 @@ The installer and the app survive version mismatches and fix common problems the
   venv, the PyTorch build against `[gpu] backend`, the card and its driver (full mode), every pinned package, ffmpeg and
   Deno, the model files (size fast; SHA-256 in full mode), free space, the `[paths]` folders, the port, leftovers,
   interrupted work, your phone's link, and the network type and firewall while a phone still uses the home Wi-Fi. Fast mode runs under 2 s with no torch import; full mode
-  is a job. Each result has `id, group, state (ok | info | warn | bad), title, say, detail, fix {id, label, how}`. Fixes:
-  `stale`, `model:<path>` / `models` (the new copy checks out before the old is replaced), `packages` (only the differing
-  hashed pin lines, on the person's click, never PyTorch), `cpu`, `resume`, `manifest`; `setup.ps1 -Repair` is offered in
-  words only. The Doctor never touches voices, songs, covers, speech or training projects and never changes Windows or
+  is a job. Each result has `id, group, state (ok | info | warn | bad), title, say, detail, fix {id, label, how, detail?}`.
+  Fixes: `stale`, `model:<path>` / `models` (the new copy checks out before the old is replaced), `packages` (only the
+  differing hashed pin lines, on the person's click, never PyTorch), `cpu`, `resume`, `manifest`; the installer's repair
+  is offered in words only (`how: offer`): the label names the Start menu's Repair UnderCover, and the fix's `detail`
+  (Deep Cover) the `setup.ps1 -Repair` command. The Doctor never touches voices, songs, covers, speech or training projects and never changes Windows or
   driver settings.
 - Safe healing at startup (`doctor.heal_at_startup`, before the server listens; `logs/doctor.log`): a pinned model file
   that is missing or the wrong size is fetched again; leftovers older than 6 h are removed through
@@ -895,7 +897,12 @@ The installer and the app survive version mismatches and fix common problems the
   paused work owns; work a crash interrupted resumes once by itself (a training with its `resume.pt`, transcripts) or is
   put back as paused; work that died twice is held.
 - Installer repair (`setup.ps1 -Repair`) runs the Doctor as JSON and redoes only what it reports; `-DryRun` shows the
-  plan. It keeps the venv, `config.toml` and every data folder.
+  plan. It keeps the venv, `config.toml` and every data folder. One exception: a processor install whose backend was
+  detected (`logs/setup-backend.txt` isn't "by hand") looks for a card again, and when one works now (nvidia-smi answers,
+  or AMD's list has it) the repair installs PyTorch for it, reinstalls the packages and rewrites `[gpu]`; the new
+  manifest names the torch file it just installed. Cover estimates keep a processor's measured speeds apart from a
+  card's (`timings.jsonl` rows carry `cpu`), and a processor with nothing measured yet guesses 15 times a card's
+  first guess (`pipeline.CPU_FIRST_GUESS`).
 - A diagnostics file (`core/diagnostics.py`, `GET /api/doctor/bundle.zip`): the logs, the manifest, `config.toml`, a
   fresh report. Text only, no audio; the person's folders shortened to `<UnderCover>`, `<library>`, `<working files>`,
   `<model files>`, `<voices>` and `%USERPROFILE%`.
@@ -959,9 +966,15 @@ An update downloads only what changed (1.0.3): `installer/installed.ps1` lists w
 has (a package at its exact pin in its own setup-made `.venv`, read from the venv itself; uv, Python, ffmpeg and Deno
 where setup reuses them), the download page skips those, and setup installs only the pins that differ (still
 `--require-hashes`, offline). A venv setup didn't make, one on the wrong Python, or one that won't start counts as
-having nothing; a repair reinstalls the packages as before. `setup.ps1` installs a private Python (`python.ps1`, via uv), the packages for the detected backend
+having nothing; a repair reinstalls the packages as before. `setup.ps1` unpacks a private Python itself (`python.ps1`: the pinned python-build-standalone archive, with Windows' tar; uv installs only the packages), the packages for the detected backend
 (`detect_gpu.ps1`: rocm, cuda128, cuda126 or cpu; `requirements/*.txt`, hashed by `pin_hashes.py` and constrained by
 `constraints.txt`), ffmpeg and Deno, puts the models in place (`python -m undercover.models install --offline`), writes
-the GPU settings, runs `selftest.py`, writes the manifest and makes a launcher. `space.ps1` and `sizes.json` give the
-wizard real disk needs per drive. A fresh install seeds the sample song and the demo voice once (`app/firstrun.py`);
+the GPU settings, runs `selftest.py`, writes the manifest and makes a launcher. `detect_gpu.ps1`'s JSON carries
+`nodriver` when Windows lists an NVIDIA card but nvidia-smi doesn't answer: the install is the processor's, and the
+wizard's Ready and finished pages say so and what to do (install the driver, then Repair UnderCover). `space.ps1` and
+`sizes.json` give the wizard real disk needs per drive (its output lines: `backend|`, `nodriver|`, `total|`, `need|`,
+`parts|`, `short|`); a folder left at the install folder is counted where `config.toml`'s `[paths]` already keeps it,
+so an update after a Storage move isn't asked for room on a drive it won't use. The uninstaller removes the app's own
+caches by name and keeps the user's files, the models, the training projects and the few `cache/` files that hold the
+user's picks or point at their files (`u_uninstall_kept_paths` holds the list against the app's cache names). A fresh install seeds the sample song and the demo voice once (`app/firstrun.py`);
 a seed the person deletes does not come back.
