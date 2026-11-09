@@ -454,7 +454,7 @@ async function ytSearch() {
 }
 const fmtPlays = n => n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? Math.round(n / 1e6) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : n;
 async function ytUse(result, btn) {
-  if (S.job || S.osBusy) return showError("Wait for the current cover to finish (or cancel it) before loading another song.", "Busy");
+  if (S.job || S.osBusy) return showError("Wait for the current cover to finish (or cancel it) before loading another song.", "One cover at a time");
   const label = btn.textContent;
   btn.disabled = true; btn.textContent = "Getting…";
   try {

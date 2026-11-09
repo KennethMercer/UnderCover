@@ -100,6 +100,7 @@ function renderBar() {
   $("#wb-forget").hidden = !w.held || !(w.resume || []).length;
   $("#wb-main").dataset.goto = main ? owner : "doubleagent";
   $("#wb-main").title = main ? `Open ${MOD_NAME[owner]}` : "";
+  $("#wb-main").setAttribute("aria-label", `Open ${MOD_NAME[main ? owner : "doubleagent"]}`);   // (a focus stop: the keyboard follows a running job to its page)
   $("#chip-train").hidden = true;   // the bar says it all
   document.documentElement.style.setProperty("--wb-h", $(".workbar-wrap").offsetHeight + "px");   // now its text is in
 }
@@ -591,3 +592,6 @@ document.addEventListener("uc:jobdone", e => {
   if (typeof seLoad === "function" && !$("#view-speakeasy").hidden) seLoad();
   if (typeof refresh === "function" && typeof T !== "undefined" && T.proj) refresh();
 });
+
+// the running strip is a link to its module: Enter or Space does what the click does (shell.js's [data-goto]); polish batch 3
+$("#wb-main")?.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } });

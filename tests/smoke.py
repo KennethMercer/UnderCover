@@ -13304,6 +13304,10 @@ def u_token_ratios():
     wa = (web / "winamp.css").read_text(encoding="utf-8")
     ix = (web / "index.html").read_text(encoding="utf-8")
     assert all(f'<small class="mono" data-deep>{n}</small>' in ix for n in ("Roformer", "RVC · RMVPE", "ffmpeg")), "engine names are Deep Cover's"
+    # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
+    assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
+    assert '"Busy")' not in (web / "app.js").read_text(encoding="utf-8") + (web / "oneshot.js").read_text(encoding="utf-8")
+    assert ".alert > .alert-btns { grid-column: 2; justify-content: flex-start; }" in (web / "app.css").read_text(encoding="utf-8")
     # bones wave 2: the song's stems in one closed Deep disclosure, the voice card's one ledger line, the one-shot's one line, a reading width
     lib, da, osj = ((web / n).read_text(encoding="utf-8") for n in ("library.js", "doubleagent.js", "oneshot.js"))
     assert '<details class="stems-box" data-deep>' in lib and "<h2>Stems</h2>" not in lib and "Separated already, so a new cover of it skips that step." in lib
