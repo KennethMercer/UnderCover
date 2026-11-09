@@ -330,7 +330,7 @@ def _quoted(word: str) -> str:
     """A heard word as the sentences quote it: the quote marks the word, so the punctuation the transcript put after it goes
     ("Baby," -> "Baby"). A word that is all punctuation stays as heard."""
     w = word.strip()
-    return (w.rstrip(",.?!;:") or w)[:MAX_WORD]
+    return (w.rstrip(",.?!;:…\"”") or w)[:MAX_WORD]   # (and an ellipsis or a closing quote)
 
 
 def _clock(t: float) -> str:
