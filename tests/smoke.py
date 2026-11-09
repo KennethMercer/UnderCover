@@ -8709,7 +8709,33 @@ def u_edits():
     assert "edits.at_make(res.id" in src and "heard.update(words=words, rows=rows)" in src
     assert '"edits": h.get("edits") or 0' in src
     assert 'one_line=edit["part"] == "backing"' in (Path(ROOT) / "undercover" / "frontman" / "edits.py").read_text(encoding="utf-8")
-    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes"
+    # chorus "keep": the cover silenced the lead's leftovers under the lines kept in the backing, and the list sings from that lead too
+    with isolated_data():
+        from undercover.core.config import path
+        from undercover.frontman.pipeline import CoverOptions
+        g = E._gate_of({"instrument": [], "chorus": [(2.0, 6.0)]}, CoverOptions(voice="x", chorus="keep"))
+        assert g == {"instrument": [], "chorus": [[2.0, 6.0]], "mode": "keep"}, g
+        sd = path("cache_dir") / "sep"
+        sd.mkdir(parents=True, exist_ok=True)
+        st = {}
+        for k, v in (("vocals", 0.1), ("backing", 0.1), ("instrumental", 0.0), ("converted", 0.1)):
+            st[k] = sd / f"{k}.flac"
+            sf.write(str(st[k]), np.full((16000 * 10, 2), v, np.float32), 16000)
+        item = {"id": "0123456789", "song": "", "stems": {k: str(st[k]) for k in ("vocals", "backing", "instrumental")},
+                "converted_vocal": str(st["converted"]), "options": {"voice": "x", "chorus": "keep"}}
+        y, _ = sf.read(str(E._stems(None, item, {"gate": g, "cover": item["id"]}, E._options(item))["vocals"]), dtype="float32")
+        assert abs(y[16000 * 4]).max() < 1e-4 and abs(y[16000 * 8] - 0.1).max() < 1e-3, (y[16000 * 4], y[16000 * 8])
+        E._drop(list(E.folder(item["id"]).glob("gate_*")))
+        from undercover.frontman import leadgate as LG
+        real = (E.get_voice, D.heard_words, E.read_pitch, LG.plan)
+        E.get_voice, D.heard_words, E.read_pitch = (lambda v: None), (lambda *a, **k: []), (lambda *a, **k: None)
+        LG.plan = lambda lead, back=None: {"instrument": [], "chorus": [(2.0, 6.0)]}
+        try:
+            doc = E.prepare(None, item, lambda *a: None)   # the list's landing points from the lead the cover sang: a silence at 2-6 s
+        finally:
+            E.get_voice, D.heard_words, E.read_pitch, LG.plan = real
+        assert doc["gate"]["chorus"] == [[2.0, 6.0]] and any(a <= 2.1 and b >= 5.9 for a, b in doc["points"]["lead"]), doc["points"]
+    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes, a kept chorus as the cover had it"
 
 
 @check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, a repeating pre-chorus left with its verse, a change between sentences, Take turns with one singer on the verses and the other on the choruses and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")

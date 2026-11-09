@@ -446,13 +446,13 @@ def _options(item: dict):
     return CoverOptions(**{"voice": item.get("voice"), **{k: v for k, v in o.items() if k in known}})
 
 
-def _stems(engine, item: dict, doc: dict, opts) -> dict:
+def _stems(engine, item: dict, doc: dict, opts, raw: dict | None = None) -> dict:
     """The stems the cover was sung from, as make_cover saw them: separated again if they've been cleaned up (about a minute), and
-    the lead gate's changes made once in the list's folder."""
+    the lead gate's changes made once in the list's folder. raw: the stems before the gate, when they're already in hand."""
     from .leadgate import apply as gate_apply
     from ..core.separate import separate
-    st = {k: Path(v) for k, v in (item.get("stems") or {}).items() if v}
-    if not st.get("vocals") or not st.get("instrumental") or not all(p.exists() for p in st.values()):
+    st = dict(raw) if raw is not None else {k: Path(v) for k, v in (item.get("stems") or {}).items() if v}
+    if raw is None and (not st.get("vocals") or not st.get("instrumental") or not all(p.exists() for p in st.values())):
         song = Path(item.get("song") or "")
         if not song.exists():
             raise ModelError("This cover's song isn't there any more, so it can't be edited.")
@@ -790,13 +790,19 @@ def prepare(engine, item: dict, report) -> dict:
         fsutil.retry(lambda: os.replace(d / "edit.json", d / "edit.json.bad"))
     if (d / "base-lead.flac").exists():   # a kept cover: a fresh list would put the edited plan on the original base
         raise ModelError("This edited cover's list can't be read, so it can't be edited. Make it again, and edit that.")
-    if d.exists():
-        _drop([*d.glob("result.*"), *d.glob("take-*.flac")])
+    if d.exists():   # (a gate's stems from a list set aside are made again from this one's gate)
+        _drop([*d.glob("result.*"), *d.glob("take-*.flac"), *d.glob("gate_*_base.flac")])
     opts = _options(item)
     get_voice(opts.voice)
     base_files(item, {"cover": item["id"]})
-    st = _stems(engine, item, {"gate": {"instrument": [], "chorus": []}, "cover": item["id"]}, opts)
-    lead, back = load_16k(st["vocals"]), load_16k(st["backing"]) if st.get("backing") else None
+    raw = _stems(engine, item, {"gate": {"instrument": [], "chorus": []}, "cover": item["id"]}, opts)
+    lead, back = load_16k(raw["vocals"]), load_16k(raw["backing"]) if raw.get("backing") else None
+    gate = _gate_of(gate_plan(lead, back) if opts.lead_gate is not False else {}, opts)
+    st = raw
+    if gate["mode"] != "top":   # the stems as the cover's conversion saw them (under "top" the first edit says it can't follow)
+        st = _stems(engine, item, {"gate": gate, "cover": item["id"]}, opts, raw)
+        if st is not raw:
+            lead, back = load_16k(st["vocals"]), load_16k(st["backing"]) if st.get("backing") else None
     report(0.2, "Listening to the words")
     words = duets.heard_words(st["vocals"], st.get("backing"), path("cache_dir") / "converted")
     rows = duets.sections(lead, words) if len(words) >= duets.MIN_WORDS else duets.phrases(lead)
@@ -809,7 +815,6 @@ def prepare(engine, item: dict, report) -> dict:
     bplan = duets.backing_plan(plan, back) if opts.duet_voice and conv_back and back is not None else [list(p) for p in plan]
     if opts.duet_backing == "other" and conv_back:
         bplan = duets.other_singer(bplan)
-    gate = _gate_of(gate_plan(lead, back) if opts.lead_gate is not False else {}, opts)
     doc = new_doc(item["id"], words, rows, plan, bplan, dur, _octaves(opts), snap_points(lead, back, words), gate, bool(opts.duet_voice), conv_back)
     save(doc)
     report(0.9, "Reading the pitch")
@@ -821,13 +826,13 @@ def prepare(engine, item: dict, report) -> dict:
 
 
 def _gate_of(g: dict, opts) -> dict:
-    """What the lead gate did to the stems, in the list: what it took from the lead, and what it brought in from the backing."""
+    """What the lead gate did to the stems, in the list: what it took from the lead, and its chorus stretches: brought in from the
+    backing, or under "keep" the lead's leftovers silenced there (leadgate.apply), as the cover had them."""
     from ..core.config import CONFIG
     from .leadgate import CHORUS_MODES
     mode = opts.chorus or CONFIG["conversion"].get("chorus", "keep")
     mode = mode if mode in CHORUS_MODES else "keep"
-    return {"instrument": [list(x) for x in g.get("instrument", [])], "chorus": [] if mode == "keep" else [list(x) for x in g.get("chorus", [])],
-            "mode": mode}
+    return {"instrument": [list(x) for x in g.get("instrument", [])], "chorus": [list(x) for x in g.get("chorus", [])], "mode": mode}
 
 
 def save_pitch(cover_id: str, tracks: dict):
