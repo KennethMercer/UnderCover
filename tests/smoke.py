@@ -10065,7 +10065,7 @@ def u_duet_shape_words():
     return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out"
 
 
-@check("duet copy (Internal Affairs D5-D8): the shared backing's progress line names both singers; one way to share it is a sentence, and I'll choose isn't shown")
+@check("duet copy (Internal Affairs D5-D8): the shared backing's progress line names both singers; one way to share it is a sentence, and I'll choose isn't shown; the first singer's chip has no 'lead' tag")
 def u_duet_copy():
     import inspect
     from undercover.frontman import pipeline as PL
@@ -10079,7 +10079,9 @@ def u_duet_copy():
     assert 'const DUET_WAY_ONE = { turns: "They take turns.", lines: "They take a line each." };' in js
     assert '$("#fm-duet-way").hidden = shown.length < 2;' in js and 'shown.length < 2 ? DUET_WAY_ONE[way] || DUET_WAY_ONE.turns : "How do they share it?"' in js
     assert js.index('const shown = $$("#fm-duet-way button")') < js.index('$("#fm-duet-way").hidden = shown.length < 2;')
-    return "the backing's progress line; one way said as a sentence"
+    # the first singer's chip has no "lead" tag: it read as "sings first", and with Fit on the key is the two's together (D7)
+    assert '${vname(S.voice)}</span>\n    <span class="vchip b">' in js.replace("\r\n", "\n") and "<small>lead</small>" not in js
+    return "the backing's progress line; one way said as a sentence; no 'lead' on the chip"
 
 
 @check("hangs (hangfix, hangtune): listen-back hears a hang inside a phrase in the take itself (a word's vowel to the next one's, 200 ms or more with 100 ms silent, no pause marked in the text), or a break (60 ms of silence where the words run into each other, no stop at the join), and reads it again with another seed, up to 5 tries, keeping the take whose longest join is shortest among takes as bad; a release blip is no vowel; a comma's pause isn't a hang; a thumbs-down for pace or pauses reads it again with new seeds; the seed is kept with the speech")

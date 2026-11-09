@@ -679,7 +679,7 @@ function renderDuet() {
   $("#fm-duet-box").classList.toggle("two", !!duet);
   $("#fm-duet-q").textContent = duet ? "Singing it" : "Sing it with someone?";
   $("#fm-duet-add").hidden = !!duet;
-  $("#fm-duet-chips").innerHTML = duet && S.voice ? `<span class="vchip a"><span class="av">${vinitial(S.voice)}</span>${vname(S.voice)}<small>lead</small></span>
+  $("#fm-duet-chips").innerHTML = duet && S.voice ? `<span class="vchip a"><span class="av">${vinitial(S.voice)}</span>${vname(S.voice)}</span>
     <span class="vchip b"><span class="av">${vinitial(duet)}</span>${vname(duet)}<button class="x" id="fm-duet-x" type="button" aria-label="Just one singer" title="Just one singer">×</button></span>` : "";
   duetPick(!duet && !$("#fm-duet").hidden);
   const shown = $$("#fm-duet-way button").filter(b => !b.hidden && !b.disabled).map(b => b.dataset.v);   // (a hidden way isn't kept from before)
