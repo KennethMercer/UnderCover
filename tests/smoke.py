@@ -7876,9 +7876,9 @@ def u_improve_estimate():
         assert well["train"] * 4 < thin["train"], (well, thin)
         assert well["prepare"] == thin["prepare"] == round(new_min / sh["kept_per_prep_min"]) and well["compare"] == thin["compare"]
         assert well["refine"] and not thin["refine"]
-    src = inspect.getsource(da_api.start_train)
-    pops = src[src.index("for k in (") : src.index("st.pop(k, None)")]
-    assert all(k in pops for k in ("init_from", "lr", "steps", "planned_epochs")), "a manual training keeps an Improve's refine plan"
+    from undercover.doubleagent.trainer import FRESH_KEYS
+    assert "for k in FRESH_KEYS" in inspect.getsource(da_api.start_train)
+    assert all(k in FRESH_KEYS for k in ("init_from", "lr", "steps", "planned_epochs")), "a manual training keeps an Improve's refine plan"
     return f"well-fed: refine {well['train']} min; thin: scratch {thin['train']} min (at {spe:.2f} s/step); the training form pops the refine plan"
 
 
@@ -8442,6 +8442,337 @@ def _fake_addon_roundtrip(addons):
         assert not r["installed_on"] and r["accepted"] and not addons.available(fake.id), r
     finally:
         addons.ADDONS.pop(fake.id, None)
+
+
+@check("bugs-da 1: a training started over (the form, Do it all, a queued Retrain) never inherits an Improve's refine plan (init_from, lr, steps, planned_epochs, seed)")
+def u_fresh_keys():
+    import inspect
+    from undercover.doubleagent import api as DA, night, project as P, service
+    from undercover.doubleagent.trainer import FRESH_KEYS
+    for fn in (DA.start_train, night._improve, service.train_new_voice, service.run_project):
+        assert "for k in FRESH_KEYS" in inspect.getsource(fn), f"{fn.__name__} keeps its own list of keys to reset"
+    with isolated_data():
+        proj = P.Project.create("Refine Leftover", "speaking")
+        plan = {"init_from": "x.pth", "lr": 1e-5, "steps": 900, "planned_epochs": 3, "seed": 1234}
+        proj.train = {**plan, "voice_name": "refine-leftover-uc", "state": "trained", "epoch": 40}
+        proj.save()
+
+        class J:
+            cancel = pausing = finished = False
+
+        class Reached(Exception):
+            pass
+
+        def push(stage, frac, msg):
+            if "Training a voice" in msg:
+                raise Reached()
+        was = P.Project.kept_seconds
+        P.Project.kept_seconds = lambda self: 600.0
+        try:
+            service.run_project(J(), proj.name, object(), push)
+            raise AssertionError("run_project didn't reach the training")
+        except Reached:
+            pass
+        finally:
+            P.Project.kept_seconds = was
+            DA.ACTIVE.pop(proj.name, None)
+        st = P.Project.load(proj.name).train
+        assert not set(plan) & set(st) and "epoch" not in st, st
+    return f"{len(FRESH_KEYS)} keys, one list in all four places; run_project's reset drops the refine plan"
+
+
+@check("bugs-da 2: a save whose every test conversion came out silent (content None) never stops a training at its save: it scores no words, and the best pick carries on")
+def u_pick_silent():
+    from undercover.doubleagent.trainer import Trainer
+    st = {"saves": [{"epoch": 10, "identity": 0.8, "content": 0.9, "cents": 20.0},
+                    {"epoch": 20, "identity": 0.0, "content": None, "cents": None}]}
+    Trainer._pick_best(None, st)
+    assert st["best"] == 10, st
+    st = {"saves": [{"epoch": 10, "identity": 0.0, "content": None, "cents": None}]}   # (every save silent: still picks)
+    Trainer._pick_best(None, st)
+    assert st["best"] == 10, st
+    return "best stays 10 beside a silent save"
+
+
+@check("bugs-da 3: a long sentence is never cut inside a direction ([pause 2s], [clear throat]): the cut swept across the tag, it's never read out")
+def u_split_tags():
+    from undercover.speakeasy import tags, tts
+    n = 0
+    for tag, word in (("[pause 2s]", "pause"), ("[clear throat]", "throat"), ("[pause 1.5 seconds]", "seconds")):
+        for at in range(30, 46):
+            w = [f"word{i}" for i in range(100)]
+            w.insert(at, tag)
+            sents = tts.sentences(" ".join(w) + ".")
+            assert len(sents) > 1 and all(s["text"].count("[") == s["text"].count("]") for s in sents), (tag, at, sents)
+            ps, unk, held = tags.directions(sents)
+            text = " ".join(p["text"] for p in ps)
+            assert word not in text and "[" not in text and unk == [], (tag, at, text, unk)
+            if word == "pause" or word == "seconds":
+                assert sum(1 for p in ps if p.get("hold")) == 1, (tag, at, ps)
+            n += 1
+    # a long bracketed aside (or a stray "[" closed far later) is cut as text: no piece runs past the limits
+    for text in ("Intro " + "[" + " ".join(f"note{i}" for i in range(120)) + "] end.",
+                 "A stray [ bracket " + " ".join(f"word{i}" for i in range(150)) + " closed ] late."):
+        pieces = tts._split_long(text)
+        assert len(pieces) > 2 and all(p and len(p) <= tts.MAX_CHARS and len(p.split()) <= tts.MAX_WORDS for p in pieces), pieces
+    return f"{n} cuts across a tag, none inside it; a long aside still cut"
+
+
+@check("bugs-da 4: a speech renamed while one of its files is held open keeps its name and its files together (the first move is put back); if even that can't be, its record follows the file, so it still lists")
+def u_rename_held():
+    from undercover.core import fsutil
+    from undercover.speakeasy import speak
+    with isolated_data():
+        d = speak.speech_dir()
+        sid = "0123456789"
+        (d / "Old one.flac").write_bytes(b"flac")
+        (d / "Old one.mp3").write_bytes(b"mp3")
+        (d / f"{sid}.json").write_text(json.dumps({"id": sid, "title": "Old one", "file": "Old one.flac", "mp3": "Old one.mp3",
+                                                   "created": "2026-11-08 10:00:00", "finished": 1.0}), encoding="utf-8")
+        real = fsutil.retry
+
+        def held(*fail, error=PermissionError):   # a retry that gives up on the calls numbered in `fail` (as after
+            n = [0]                                # ~3 s of a held file)
+
+            def retry(fn, tries=30):
+                n[0] += 1
+                if n[0] in fail:
+                    raise error(17, "held open")
+                return fn()
+            return retry
+        try:
+            fsutil.retry = held(2)   # the FLAC moves, the MP3 is held: the FLAC goes back
+            try:
+                speak.rename_speech(sid, "New name")
+                raise AssertionError("a rename with a held file said it worked")
+            except speak.SpeakError as e:
+                assert "Old one.mp3" in str(e), e
+            assert sorted(p.name for p in d.iterdir() if p.suffix != ".json") == ["Old one.flac", "Old one.mp3"]
+            assert [x["id"] for x in speak.list_speech()] == [sid] and speak.get_speech(sid)["file"] == "Old one.flac"
+            fsutil.retry = held(2, 3)   # and the FLAC can't go back either: the record names where it is
+            try:
+                speak.rename_speech(sid, "New name")
+                raise AssertionError("a rename with a held file said it worked")
+            except speak.SpeakError:
+                pass
+            got = speak.get_speech(sid)
+            assert got["file"] == "New name.flac" and got["mp3"] == "Old one.mp3" and [x["id"] for x in speak.list_speech()] == [sid], got
+            fsutil.retry = real
+            assert speak.rename_speech(sid, "Fine")["file"] == "Fine.flac" and (d / "Fine.mp3").exists()
+            fsutil.retry = held(2, error=FileExistsError)   # another failure: put back too, and not said as a held file
+            try:
+                speak.rename_speech(sid, "Other")
+                raise AssertionError("a failed rename said it worked")
+            except speak.SpeakError as e:
+                assert "couldn't be renamed" in str(e) and "open somewhere" not in str(e), e
+            assert speak.get_speech(sid)["file"] == "Fine.flac" and (d / "Fine.flac").exists() and (d / "Fine.mp3").exists()
+        finally:
+            fsutil.retry = real
+    return "held MP3: the FLAC put back, the speech lists; can't put back: the record follows"
+
+
+@check("bugs-da 5: a pause written without a unit, in milliseconds or with a stop ([pause 2], [pause 500ms], [pause 1.5 s.]) is a pause, never read out; one in a unit we don't read ([pause 2 minutes]) is named, not spoken")
+def u_pause_forms():
+    from undercover.speakeasy import tags, tts
+    d = lambda text: tags.directions(tts.sentences(text))[:2]
+    for tag, secs in (("[pause 2]", 2.0), ("[pause 500ms]", 0.5), ("[pause 1.5 s.]", 1.5), ("[pause 2 sec.]", 2.0),
+                      ("[pause 250 milliseconds]", 0.25), ("[Pause 3 Seconds]", 3.0), ("[pause 9]", tags.PAUSE_MAX_S)):
+        ps, unk = d(f"Wait {tag} for it.")
+        assert [p["text"] for p in ps] == ["Wait", "for it."] and ps[0]["hold"] == secs and unk == [], (tag, ps, unk)
+    ps, unk = d("The first part is done. [pause 1.5 s.] Now the second part starts.")   # (a stop in the tag ends no sentence)
+    assert [p["text"] for p in ps] == ["The first part is done.", "Now the second part starts."] and ps[0]["hold"] == 1.5, ps
+    for tag in ("[pause 2 minutes]", "[pause 500]", "[louder 2x]"):   # never read out, never guessed: named
+        ps, unk = d(f"Hold {tag} on.")
+        assert [p["text"] for p in ps] == ["Hold on."] and unk == [tag] and "hold" not in ps[0] and "gain_db" not in ps[0], (tag, ps, unk)
+    ps, unk = d("See [John 3] and [Fig 2] here.")   # a name and a number: still text
+    assert ps[0]["text"] == "See [John 3] and [Fig 2] here." and unk == [], (ps, unk)
+    return "2, 500ms, 1.5 s., milliseconds, capitals: pauses; 2 minutes named"
+
+
+@check("bugs-da 6: a training that crashes before its first resume point is said as failed, never paused (Resume would start over and delete its saves); with a resume point it's paused")
+def u_crash_no_resume():
+    import types
+    from undercover.core import gpu, jobs
+    from undercover.doubleagent import api as DA, project as P, trainer
+    with isolated_data():
+        proj = P.Project.create("Crash Early", "speaking")
+
+        class FakeTrainer:
+            def __init__(self, pr, *a, **k):
+                self.pr = pr
+
+            def run(self, control, progress=None):
+                self.pr.train["epoch"] = 3
+                self.pr.save_train()
+                raise RuntimeError("the GPU fell over")
+        queued = []
+        saved = trainer.Trainer, gpu.MODELS, jobs.GPU_QUEUE
+        trainer.Trainer = FakeTrainer
+        gpu.MODELS = types.SimpleNamespace(converter=types.SimpleNamespace(hubert=None, rmvpe=None, device="cpu", half=False))
+        jobs.GPU_QUEUE = types.SimpleNamespace(put=queued.append)
+        try:
+            states = []
+            for with_resume in (False, True):
+                job = DA.start_train(proj.name, {"fresh": True})
+                if with_resume:   # (start_train removes an old one: this run's own, written at a save)
+                    (proj.dir / "train").mkdir(parents=True, exist_ok=True)
+                    (proj.dir / "train" / "resume.pt").write_bytes(b"pt")
+                try:
+                    queued[-1][1](job)
+                    raise AssertionError("the crash didn't come through")
+                except RuntimeError:
+                    pass
+                job.state = "error"   # (as the GPU worker ends it)
+                states.append(P.Project.load(proj.name).train["state"])
+                jobs.JOBS.pop(job.id, None)
+            assert states == ["failed", "paused"], states
+        finally:
+            trainer.Trainer, gpu.MODELS, jobs.GPU_QUEUE = saved
+            DA.ACTIVE.pop(proj.name, None)
+    return "no resume point: failed; with one: paused"
+
+
+@check("bugs-da 7: two trainings started at the same moment (two quick POSTs, the form and Do it all): exactly one starts, the other is told one voice trains at a time, and the one running is the one Pause and Stop reach")
+def u_start_race():
+    import inspect
+    import threading
+    import types
+    from undercover.core import jobs
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import api as DA, project as P
+    with isolated_data():
+        a, b = P.Project.create("Race One", "speaking"), P.Project.create("Race Two", "speaking")
+        saved = DA.check_voice_name, jobs.GPU_QUEUE
+        jobs.GPU_QUEUE = types.SimpleNamespace(put=lambda item: None)
+
+        def slow_check(proj, name):   # (a wide gap between the checks and the ACTIVE entry, as a busy PC's)
+            time.sleep(0.3)
+            return saved[0](proj, name)
+        DA.check_voice_name = slow_check
+        from undercover.doubleagent import service   # (the queue's runs take the same step)
+        for fn in (service.train_new_voice, service.run_project):
+            assert "with train_api._STARTING:" in inspect.getsource(fn), fn.__name__
+        try:
+            for first, second in ((DA.start_train, DA.start_train), (DA.start_auto, DA.start_train)):
+                go, got = threading.Barrier(2), []
+
+                def start(fn, proj):
+                    go.wait()
+                    try:
+                        got.append(("ok", fn(proj.name, {"fresh": True, "voice_name": f"{proj.name}-uc"})))
+                    except ModelError as e:
+                        got.append(("refused", str(e)))
+                ts = [threading.Thread(target=start, args=(fn, p)) for fn, p in ((first, a), (second, b))]
+                for t in ts:
+                    t.start()
+                for t in ts:
+                    t.join(10)
+                ok = [j for k, j in got if k == "ok"]
+                assert len(ok) == 1 and len(got) == 2 and "one voice trains at a time" in next(m for k, m in got if k == "refused").lower(), got
+                assert [x["job"] for x in DA.ACTIVE.values() if not x["job"].finished] == ok, DA.ACTIVE
+                for n in (a.name, b.name):
+                    x = DA.ACTIVE.pop(n, None)
+                    if x:
+                        x["job"].state = "cancelled"
+                        jobs.JOBS.pop(x["job"].id, None)
+        finally:
+            DA.check_voice_name, jobs.GPU_QUEUE = saved
+            for n in (a.name, b.name):
+                DA.ACTIVE.pop(n, None)
+    return "form + form, Do it all + form: one each time"
+
+
+@check("bugs-da 8: SpeakEasy's Reader thread ends soon after a Stop, its read-ahead queue full and nobody reading it (it used to wait on it for good, one thread per Stop); an error still reaches the job")
+def u_read_ahead_stop():
+    import inspect
+    import queue
+    import threading
+    from undercover.speakeasy import speak
+    assert "_read_ahead" in inspect.getsource(speak.make_speech), "make_speech reads ahead some other way"
+    sents = [{"text": f"Sentence {i}."} for i in range(10)]
+    q, stop = queue.Queue(maxsize=3), threading.Event()
+    t = threading.Thread(target=speak._read_ahead, args=(sents, lambda text: text, q, stop), daemon=True)
+    t.start()
+    first = q.get(timeout=5)   # the job takes one sentence, then is stopped
+    assert first[0] == "Sentence 0.", first
+    time.sleep(0.3)   # (the reader fills the queue and waits on it)
+    stop.set()
+    t.join(1.0)
+    assert not t.is_alive(), "the Reader's thread still waits on the queue after a Stop"
+
+    def broken(text):
+        raise RuntimeError("the Reader fell over")
+    q2 = queue.Queue(maxsize=3)
+    t = threading.Thread(target=speak._read_ahead, args=(sents, broken, q2, threading.Event()), daemon=True)
+    t.start()
+    t.join(2.0)
+    e = q2.get_nowait()
+    assert isinstance(e, RuntimeError) and not t.is_alive(), e
+    return "gone within 1 s of the Stop; an error handed over"
+
+
+@check("bugs-da 9: a training history with a line cut short (a crash as it was written) still loads: the project page and Resume read the rest, a NaN loss reaches the page as nothing, and Resume rewrites the history whole and safely")
+def u_history_cut():
+    import inspect
+    from undercover.doubleagent import api as DA, project as P, trainer
+    with isolated_data():
+        proj = P.Project.create("Cut Short", "speaking")
+        tdir = proj.dir / "train"
+        tdir.mkdir(parents=True, exist_ok=True)
+        lines = [json.dumps({"epoch": 1, "secs": 2.0, "val": 0.5, "mel": 30.0}),
+                 json.dumps({"epoch": 2, "secs": 2.0, "val": float("nan"), "mel": float("inf")}),
+                 '{"epoch": 3, "secs": 2.0, "va']
+        (tdir / "history.jsonl").write_text("\n".join(lines), encoding="utf-8")
+        hist = trainer.read_history(tdir / "history.jsonl")
+        assert [h["epoch"] for h in hist] == [1, 2], hist
+        proj.train["saves"] = [{"epoch": 2, "val": float("nan")}]   # (a diverged training's save, and its losses)
+        proj.save()
+        page = DA.project_json(P.Project.load(proj.name))
+        json.dumps(page, allow_nan=False)   # (what a browser can parse)
+        assert [(h["val"], h["mel"]) for h in page["history"]] == [(0.5, 30.0), (None, None)], page["history"]
+        assert page["saves"][0]["val"] is None, page["saves"]
+        assert trainer.read_history(tdir / "nothing.jsonl") == []
+    src = inspect.getsource(trainer.Trainer.run)
+    assert 'fsutil.write_text(self.tdir / "history.jsonl"' in src and "hf.write_text(" not in src
+    return "2 of 3 lines read; the NaN sent as null"
+
+
+@check("bugs-da 10: a [pause] at the very start of the text is silence before the first words (it used to be dropped); it stays on the first piece when pieces are joined or split at commas, and both readings put it there")
+def u_lead_pause():
+    import inspect
+    from undercover.core.cadence import render
+    from undercover.speakeasy import speak, tags, tts
+    d = lambda text: tags.directions(tts.sentences(text))[0]
+    ps = d("[pause 2s] Hello there, my friend. How are you today?")
+    assert ps[0]["lead"] == 2.0 and "hold" not in ps[0] and ps[0]["text"].startswith("Hello") and "lead" not in ps[1], ps
+    assert d("[pause] [louder] Go on then.")[0]["lead"] == tags.PAUSE_S
+    assert all("lead" not in p for p in d("Hello there. [pause 2s] Again here."))   # (a later pause stays the one before's)
+    j = render.join_short([{**ps[0], "text": "Hi.", "pause": 0.3}, {"text": "Now we start this.", "pause": 0.0}])
+    assert len(j) == 1 and j[0]["lead"] == 2.0, j
+    c = render.split_clauses([ps[0]])
+    assert [x.get("lead") for x in c] == [2.0, None], c
+    src = inspect.getsource(speak.make_speech) + inspect.getsource(speak._make_cadence)
+    assert src.count('s.get("lead")') == 2, "a reading leaves the lead out"
+    return "lead 2.0 s on the first piece; kept by join and split; both readings"
+
+
+@check("bugs-da side note: sentences left out for not being in English are counted and said once under the result (they used to vanish without a word); a text with nothing in English says so")
+def u_not_english():
+    import inspect
+    from undercover.speakeasy import speak, tags, tts
+    sents = tts.sentences("Hello there, friend.\n\nПривет, как дела?\n\nこんにちは。\n\nGood night [pause 2s] everyone.")
+    ps = tags.directions(sents)[0]
+    assert all(any(c.isascii() and c.isalpha() for c in p["text"]) for p in ps), ps
+    assert tags.not_english(sents) == 2 and tags.not_english(tts.sentences("Just English [pause], 42 times.")) == 0
+    with isolated_data():
+        speak.speech_dir()
+        m = {"id": "abcdef0123", "file": "x.flac", "not_english": 2}
+        assert speak._item(m)["not_english"] == 2 and speak._item({**m, "not_english": None})["not_english"] == 0
+    src = inspect.getsource(speak.make_speech) + inspect.getsource(speak._save)
+    assert '"not_english": tags.not_english(raw)' in src and '"not_english": int(p.get("not_english") or 0)' in src
+    js = (ROOT / "undercover" / "web" / "speakeasy.js").read_text(encoding="utf-8")
+    assert "ev.result.not_english" in js and "isn't in English" in js
+    return "2 of 4 paragraphs counted; said under the result"
 
 
 @contextlib.contextmanager
@@ -17569,7 +17900,8 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk,
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut, u_lead_pause, u_not_english):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

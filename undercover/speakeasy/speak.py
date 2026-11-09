@@ -148,6 +148,30 @@ def _loaded(conv, v):
     return LoadedVoice(v, conv.device, conv.half)
 
 
+def _read_ahead(sents: list, synth, q: "queue.Queue", stop: threading.Event):
+    """The Reader's thread: each sentence read (synth(text) -> audio) into q, as (audio, seconds), or the error that
+    ended it. It never waits on a full queue past `stop`: after a Stop or an error the job thread has left, nothing
+    reads q, and a plain put would hold this thread for good (one more per Stop)."""
+    def put(item) -> bool:
+        while not stop.is_set():
+            try:
+                q.put(item, timeout=0.5)
+                return True
+            except queue.Full:
+                continue
+        return False
+    try:
+        for s in sents:
+            if stop.is_set():
+                return
+            t = time.perf_counter()
+            a = synth(s["text"])
+            if not put((a, time.perf_counter() - t)):
+                return
+    except BaseException as e:   # handed to the job thread
+        put(e)
+
+
 def render_line(job, v) -> tuple[np.ndarray, int]:
     """The voice's preview line (core.voicepreview), read exactly as SpeakEasy reads anything with this voice, and not
     saved as a speech. Registered with core.voicepreview by the app."""
@@ -173,10 +197,12 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
     p = plan(voice, reader, speed, nudge, cadence, pace, v=v)
     # the text's directions ([pause], [louder], ... and a cadence engine's own tags the ear passed) become fields
     known = tags.engine_tags(p.get("engine")) if p["mode"] == "cadence" else frozenset()
-    sents, unknown, held = tags.directions(tts.sentences(text), known)
-    p = {**p, "known_tags": sorted(known), "unknown_tags": unknown, "held_tags": held, "seed": int(seed)}
+    sents, unknown, held = tags.directions(raw := tts.sentences(text), known)
+    p = {**p, "known_tags": sorted(known), "unknown_tags": unknown, "held_tags": held, "seed": int(seed),
+         "not_english": tags.not_english(raw)}
     if not sents:
-        raise SpeakError("There's nothing to read in that text.")
+        raise SpeakError("SpeakEasy reads English only, and nothing in that text is." if p["not_english"]
+                         else "There's nothing to read in that text.")
     if p["mode"] == "cadence":
         return _make_cadence(job, text, sents, p, save)
     t0 = time.perf_counter()
@@ -199,18 +225,8 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
     # Kokoro (CPU) reads ahead in its own thread while the GPU converts
     q: "queue.Queue" = queue.Queue(maxsize=3)
     stop = threading.Event()
-
-    def reader_thread():
-        try:
-            for s in sents:
-                if stop.is_set():
-                    return
-                t = time.perf_counter()
-                a = tts.synth(s["text"], p["reader"], p["speed"])
-                q.put((a, time.perf_counter() - t))
-        except BaseException as e:   # handed to the job thread
-            q.put(e)
-    threading.Thread(target=reader_thread, daemon=True, name="kokoro").start()
+    threading.Thread(target=_read_ahead, args=(sents, lambda text: tts.synth(text, p["reader"], p["speed"]), q, stop),
+                     daemon=True, name="kokoro").start()
 
     pieces, made, t_tts, t_rvc = [], 0.0, 0.0, 0.0
     try:
@@ -237,7 +253,7 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
                 y = _level(np.nan_to_num(y), -20.0 + (s.get("gain_db") or 0.0))   # ([louder]: still under -1 dBFS)
             t_rvc += time.perf_counter() - t
             gap = np.zeros(int(sr * (s["hold"] if s.get("hold") is not None else s["pause"] * p.get("gap_scale", 1.0))), np.float32)
-            y = np.concatenate([y, gap])
+            y = np.concatenate([np.zeros(int(sr * (s.get("lead") or 0.0)), np.float32), y, gap])   # (lead: a [pause] first)
             f = pdir / f"s{i:04d}.wav"
             sf.write(str(f), y, sr, subtype="PCM_16")
             pieces.append(y)
@@ -521,7 +537,8 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
             pause = 0.0 if s["pause"] == 0 else (p["para_gap_s"] if s["pause"] >= 0.5 else p["gap_s"])
             if s.get("hold") is not None:   # a written [pause]: exactly that
                 pause = s["hold"]
-            y = np.concatenate([y, np.zeros(int(sr * pause), np.float32)])
+            y = np.concatenate([np.zeros(int(sr * (s.get("lead") or 0.0)), np.float32), y,   # (lead: a [pause] first)
+                                np.zeros(int(sr * pause), np.float32)])
             f = pdir / f"s{i:04d}.wav"
             sf.write(str(f), y, sr, subtype="PCM_16")
             pieces.append(y)
@@ -580,7 +597,7 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "duration": round(len(y) / sr, 2), "sr": sr, "seconds": seconds,
             "job": job_id, "finished": round(time.time(), 3), "seed": p.get("seed", SEED),
             "directions_unknown": p.get("unknown_tags") or [],
-            "directions_held": p.get("held_tags") or []}
+            "directions_held": p.get("held_tags") or [], "not_english": int(p.get("not_english") or 0)}
     with LOCK:
         fsutil.write_text(d / f"{sid}.json", json.dumps(meta, indent=1))
         try:
@@ -656,6 +673,7 @@ def _item(m: dict) -> dict:
     return {**{k: m.get(k) for k in ("id", "title", "text", "voice", "reader", "reader_auto", "speed", "pitch", "created",
                                       "duration", "seconds", "file", "mp3", "mode", "engine", "pace", "kept_at")},
             "directions_unknown": m.get("directions_unknown") or [], "directions_held": m.get("directions_held") or [],
+            "not_english": int(m.get("not_english") or 0),
             "kept": bool(m.get("kept")), "url": file_url(wav), "mp3_url": file_url(mp3) if mp3 and mp3.exists() else None, "size": size,
             "format": wav.suffix[1:].upper() + (" + MP3" if mp3 and mp3.exists() else "")}
 
@@ -747,13 +765,31 @@ def rename_speech(sid: str, name: str) -> dict:
         if not name:
             raise SpeakError("Type a name.")
         d = speech_dir()
-        moves = [(d / m[k], d / (name + Path(m[k]).suffix)) for k in ("file", "mp3") if m.get(k)]
-        for old, new in moves:
+        moves = [(k, d / m[k], d / (name + Path(m[k]).suffix)) for k in ("file", "mp3") if m.get(k)]
+        for _, old, new in moves:
             if new.exists() and new != old:
                 raise SpeakError(f"There's already a file called \"{new.name}\".")
-        for old, new in moves:
-            if old.exists():
-                fsutil.retry(lambda old=old, new=new: old.rename(new))
+        done, held = [], None
+        try:
+            for k, old, new in moves:
+                if old.exists():
+                    held = old
+                    fsutil.retry(lambda old=old, new=new: old.rename(new))
+                    done.append((k, old, new))
+        except OSError as e:   # (one file held open, a download of it: the speech and its files stay together, as they were)
+            stuck = False
+            for k, old, new in reversed(done):
+                try:
+                    fsutil.retry(lambda old=old, new=new: new.rename(old))
+                except OSError:   # can't go back either: the record follows the file, so the speech still lists
+                    m[k], stuck = new.name, True
+            if stuck:
+                fsutil.write_text(f, json.dumps(m, indent=1))
+            if isinstance(e, PermissionError):
+                raise SpeakError(f"\"{held.name}\" is open somewhere (a download or a player?), so the speech "
+                                 "keeps its name. Try again in a moment.")
+            raise SpeakError(f"\"{held.name}\" couldn't be renamed ({e.strerror or type(e).__name__}), so the speech "
+                             "keeps its name.")
         m["file"] = name + Path(m["file"]).suffix
         if m.get("mp3"):
             m["mp3"] = name + ".mp3"

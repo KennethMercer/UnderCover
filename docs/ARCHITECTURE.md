@@ -440,7 +440,9 @@ default: blind, the re-reads fixed the word and the other two did not. Whisper i
 SpeakEasy's text takes directions in square brackets (`speakeasy/tags.py`). A direction applies to the sentence it
 sits in, and none is ever read out:
 - `[pause]`, or `[pause 2s]` up to 5 s: silence at that spot. The sentence is read as two pieces, the first ending in
-  that `hold`.
+  that `hold`. A bare number is seconds (`[pause 2]`), `ms` is read (`[pause 500ms]`), a stop after the unit is fine;
+  a length it can't read (`[pause 2 minutes]`, `[pause 500]`) is named as unknown. A pause before the text's first
+  words is silence before them (`lead` on the first piece). A long sentence is never cut inside a bracket.
 - `[louder]` / `[softer]`: ±4 dB, by the level the sentence is set to.
 - `[higher]` / `[lower]`: ±2 semitones on the reading's pitch, held in the voice's `f0_range`
   (`cadence.held_pitch`).
@@ -455,7 +457,8 @@ the ear passes one, it goes in `tags.ENGINE_ON`; for a cadence voice it's then p
 from its tokenizer's `added_tokens.json`).
 
 An unknown tag is read as nothing and named once under the result. An editor's bracket stays text: [sic], a
-capitalised [Name], a number. Pieces keep their directions: `join_short` never joins across a written pause or a
+capitalised [Name], a number. Text in another script is left out (the readers read English only), and the result
+says so (`not_english` on the speech's record). Pieces keep their directions: `join_short` never joins across a written pause or a
 change of direction. Listen-back hears only the words: a sound tag's noise is no extra word, and no stray ending to
 cut.
 
@@ -641,7 +644,9 @@ voice (mean cosine to the reference at least 0.62, median phrase score at least 
 within 5 semitones of the voice's own) and the pipeline kept more than a tenth of it; left-out sources are reported
 with why. A well-fed voice (8 minutes or more, likeness 0.6 or more, new data under 1.5x the old) is refined from its
 own weights (lr 2e-5, about 2000 steps for 10-20 minutes of new data); a thin voice or a big data jump is retrained from
-scratch with the scaled budget, because refine learns little from a fivefold jump. Whatever is offered, the person
+scratch with the scaled budget, because refine learns little from a fivefold jump. The refine plan (`init_from`, `lr`,
+`steps`) stays in the project's training state; every training that starts over drops it with the last run's progress
+(`trainer.FRESH_KEYS`, one list for the form, Do it all, a queued project and the Improve). Whatever is offered, the person
 listens to two of the test's own lines through both voices, blind, and keeps one.
 
 ## UI
