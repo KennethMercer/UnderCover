@@ -1254,7 +1254,7 @@ def u_harden1():
     assert "AWAY_401" in ga and "AWAY_403" in ga and "Away from home is off" not in ga and "self._deny(403)" not in ga, ga
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
     assert "the connection isn't encrypted" not in page and "home Wi-Fi only" not in page.lower() and "home-only" not in page.lower()
-    assert "Use UnderCover on your phone, at home or anywhere." in page
+    assert "Use UnderCover from your phone, at home or away. One link works for both." in page
     # another site's page: refused on every method and listener; following a link to a page is let through
     cs = lambda m, p, **h: S._cross_site(m, p, {k.replace("_", "-").title(): v for k, v in h.items()})
     assert cs("POST", "/api/voices/install", sec_fetch_site="cross-site", sec_fetch_mode="cors")
@@ -2191,7 +2191,9 @@ def u_phone_card():
               "phone-all", "away-forget", "set-away-private", "set-phone-me", "ph-move", "ph-move-say", "ph-move-go"):
         assert page.count(f'id="{i}"') == 1, i
     for gone in ("set-phone\"", "set-away\"", "away-box", "away-me", "set-away-me-row", "Phone access", "Away from home", "away from home", "paired"):
-        assert gone not in page.split('id="room-settings"', 1)[1].split('id="room-addons"', 1)[0], f"the card still has {gone!r}"
+        # (a row's find-words may carry an old name on purpose: Find a setting finds Your phone by "away from home")
+        room = re.sub(r'data-find="[^"]*"', "", page.split('id="room-settings"', 1)[1].split('id="room-addons"', 1)[0])
+        assert gone not in room, f"the card still has {gone!r}"
     for route in ("/api/phone/allow", "/api/phone/refuse", "/api/phone/pair/short", "/api/phone/revoke-all", "/api/phone/forget",
                   "/api/phone/move/link", "{ on: true }", "{ on: false }"):
         assert route in rooms, route
