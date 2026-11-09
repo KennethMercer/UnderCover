@@ -830,7 +830,7 @@ def u_gamepause():
             assert gp.before_start(job3, sleep=lambda _s: None, look=lambda: game) == "start"
             # the GPU worker asks the gates before every job, and says which job is on the GPU (what "busy" means)
             import inspect
-            src = inspect.getsource(jobs.gpu_worker)
+            src = inspect.getsource(jobs._take_one)   # (the GPU worker's one turn)
             assert src.index("gate(job)") < src.index("CURRENT[0] = job") < src.index("run_job(job, fn)"), "the gate isn't wired"
             assert not gp._gpu_busy()
         finally:
@@ -13009,6 +13009,59 @@ def u_restart_guard():
     return "409 with now_ok for 6 kinds, 409 even with now for the 4 that can't stop halfway, waits for late work"
 
 
+@check("the GPU worker rests when no waiting job fits Low profile's cap: two or three of them looked at under 10 times in 2 s, "
+       "not a million; a job that fits behind them still runs at once")
+def u_defer_rest():
+    import queue
+    import threading
+    from undercover.core import jobs, lowprofile
+    saved = (jobs.GPU_QUEUE, lowprofile.before_job, list(jobs.START_GATES), jobs.CURRENT[0])
+    looks, ran = [], []
+    try:
+        with isolated_data():
+            for n in (2, 3):
+                jobs.GPU_QUEUE = queue.Queue()
+                jobs.START_GATES[:] = []
+                lowprofile.before_job = lambda job: looks.append(job.id) and None   # (nothing fits the cap)
+                looks.clear()
+                for _ in range(n):
+                    jobs.GPU_QUEUE.put((jobs.Job("zz-smoke"), lambda j: None))
+                stop = threading.Event()
+
+                def turn():
+                    deferred = set()
+                    while not stop.is_set():
+                        jobs._take_one(deferred)
+                th = threading.Thread(target=turn, daemon=True)
+                th.start()
+                time.sleep(2.0)
+                stop.set()
+                seen = len(looks)
+                th.join(jobs.DEFER_REST_S + 2)
+                assert not th.is_alive()
+                assert n <= seen < 10, f"{seen} looks in 2 s with {n} waiting jobs (it spins)"
+            # one that fits, queued behind the waiting ones, runs on the next pass
+            jobs.GPU_QUEUE = queue.Queue()
+            wait = [jobs.Job("zz-smoke") for _ in range(2)]
+            go = jobs.Job("zz-smoke")
+            for j in (*wait, go):
+                jobs.GPU_QUEUE.put((j, lambda j: ran.append(j.id) or j.finish("done")))
+            lowprofile.before_job = lambda job: True if job is go else None
+            jobs.DEFER_REST_S, rest = 0.0, jobs.DEFER_REST_S
+            try:
+                d = set()
+                for _ in range(3):
+                    jobs._take_one(d)
+            finally:
+                jobs.DEFER_REST_S = rest
+            assert ran == [go.id] and jobs.GPU_QUEUE.qsize() == 2 and not d, (ran, jobs.GPU_QUEUE.qsize(), d)
+    finally:
+        jobs.GPU_QUEUE, lowprofile.before_job = saved[0], saved[1]
+        jobs.START_GATES[:] = saved[2]
+        jobs.CURRENT[0] = saved[3]
+    return f"rests {jobs.DEFER_REST_S:.0f} s after a whole pass"
+
+
 @check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")
 def u_perf_history():
     from undercover.frontman import history as hstore, pipeline
@@ -15497,7 +15550,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_perf_history, u_perf_library):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
