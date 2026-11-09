@@ -55,7 +55,7 @@ from ..core.fsutil import retry as _retry
 from ..core.voices import ModelError, slug
 from ..frontman.songs import remove_song
 from . import library
-from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _update_ytdlp, _ytdlp_auto, covers
+from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _guard_cleanup, _update_ytdlp, _ytdlp_auto, covers
 
 
 def handle(h, method: str, p: str) -> bool:
@@ -116,8 +116,9 @@ def _route(h, method, p):
     if rest == "cleanup":
         if method == "GET":
             return h._json({k: {kk: vv for kk, vv in v.items() if kk != "paths"} for k, v in _cleanup_groups().items()})
-        _guard()
-        return h._json(library.clean_up(set(h._body().get("groups") or [])))
+        groups = set(h._body().get("groups") or [])
+        _guard_cleanup()   # every kind of work, queued or running: Clean up reaches the files all of them use
+        return h._json(library.clean_up(groups))
     if rest == "covers/zip" and method == "GET":
         ids = {x for x in (q.get("ids") or [""])[0].split(",") if re.fullmatch(r"[0-9a-f]{10}", x)}
         files = [(path("output_dir") / c["file"], c["file"]) for c in covers() if c["id"] in ids]
