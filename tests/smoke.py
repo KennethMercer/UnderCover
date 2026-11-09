@@ -13373,6 +13373,58 @@ def u_perf_duet_feats():
     return "5 chunks, 3 HuBERT passes inside the block; outputs identical to reading them each time"
 
 
+@check("perf: training's held-out check makes each phrase's own mel once a run (the loss is the same)")
+def u_perf_validate():
+    import torch
+    from undercover.core.engine.rvc import train_parts
+    from undercover.doubleagent.trainer import SR_CFG, Trainer
+    sr = 40000
+    c = SR_CFG[sr]
+    g = torch.Generator().manual_seed(0)
+    hold = [{"wav": 0.1 * torch.randn(sr, generator=g), "phone": torch.zeros(100, 768), "pitch": torch.zeros(100, dtype=torch.long),
+             "pitchf": torch.zeros(100), "n": 100} for _ in range(3)]
+
+    class Net:
+        k = 0
+
+        def eval(self):
+            pass
+
+        def train(self):
+            pass
+
+        def infer(self, phone, n, pitch, pitchf, sid):
+            x = hold[Net.k % len(hold)]["wav"]
+            Net.k += 1
+            return ((x * 0.8)[None, None],)
+    tr = Trainer.__new__(Trainer)
+    tr.device = torch.device("cpu")
+    real, calls = train_parts.mel_spectrogram_torch, [0]
+
+    def counted(*a, **k):
+        calls[0] += 1
+        return real(*a, **k)
+    plain = [{k: v for k, v in x.items()} for x in hold]
+    try:
+        train_parts.mel_spectrogram_torch = counted
+        Net.k = 0
+        v1 = tr._validate(Net(), hold, c, sr)
+        assert calls[0] == 2 * len(hold), calls
+        Net.k = 0
+        v2 = tr._validate(Net(), hold, c, sr)
+        assert calls[0] == 3 * len(hold), f"the held-out mels were made again ({calls[0]})"
+        Net.k = 0
+        c2 = {**c, "mels": c["mels"] // 2}   # other settings: made again for them
+        tr._validate(Net(), hold, c2, sr)
+        assert calls[0] == 5 * len(hold), calls
+    finally:
+        train_parts.mel_spectrogram_torch = real
+    Net.k = 0
+    v0 = tr._validate(Net(), plain, c, sr)   # fresh items, nothing kept: the same loss
+    assert v1 == v2 == v0, (v1, v2, v0)
+    return f"{len(hold)} held-out phrases: mels {2 * len(hold)} on the first epoch, {len(hold)} after; loss identical"
+
+
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
     ("GET", "/static/icon-192.png"), ("GET", "/static/icon-512.png"), ("GET", "/files/output/x.mp3"), ("GET", "/pair"),
@@ -15681,7 +15733,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices, u_perf_static, u_perf_voicecheck, u_perf_duet_feats):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices, u_perf_static, u_perf_voicecheck, u_perf_duet_feats, u_perf_validate):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
