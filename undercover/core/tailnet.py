@@ -28,6 +28,14 @@ from . import platform, storage
 from .config import path
 from .voices import ModelError
 
+# A release ships the phone link's setup only once it has been checked live with Tailscale (the maintainers' notes,
+# release-1.2-plan; the user, 2026-11-08: 1.2 ships without it). False: no Set up on the card, no Phone link in the tray,
+# the link never starts, and Forget never starts the daemon; phones paired on the home Wi-Fi before keep working there.
+# The release that offers the link sets this to True (and its test with it).
+OFFERED = False
+if os.environ.get("UNDERCOVER_TEST_LINK") == "1" and os.environ.get("UNDERCOVER_TEST_ROOTS"):
+    OFFERED = True   # (smoke's sandbox server, in test mode only: the phone's own checks run with the link)
+NOT_OFFERED_WHY = "Your phone's link comes in a later UnderCover. Phones connected on the home Wi-Fi before keep working there."
 VERSION = "1.104.1"
 MSI = {"url": f"https://pkgs.tailscale.com/stable/tailscale-setup-{VERSION}-amd64.msi", "size": 38_718_976,
        "sha256": "6da8bcdb0d45a214cae0e8a88c2987ad48dec134bf04dffb9c05f1354c02b0b4"}
@@ -332,6 +340,8 @@ def tick():
 def start(port: int, private: bool = False):
     """Switch on: the driver walks to ready (the away listener on `port` is the only funnel target). private: Serve
     on the tailnet instead of Funnel."""
+    if not OFFERED:
+        raise ModelError(NOT_OFFERED_WHY)
     ok, why = platform.supports("away")
     if not ok:
         raise ModelError(why)
@@ -430,7 +440,14 @@ def at_exit():
 
 def forget():
     """Switch off and sign this PC out of Tailscale (the node leaves the tailnet); its keys (the state folder) are
-    deleted. With the phone link off the daemon isn't running: it's started for the logout."""
+    deleted. With the phone link off the daemon isn't running: it's started for the logout. While the link isn't
+    offered it never starts: the state folder (the node's keys) is deleted unread, so the node can't come online again
+    and ages out of the tailnet's admin console by itself."""
+    if not OFFERED:
+        stop()
+        if state_dir().exists():
+            storage.remove_files([], within=[path("cache_dir")], dirs=[state_dir()])
+        return
     if state_dir().exists() and have_binaries() and not _daemon_alive():
         with _LOCK:
             if _P["daemon"] is None or _P["daemon"].poll() is not None:
@@ -452,7 +469,9 @@ def forget():
 def snapshot() -> dict:
     """For SafeHouse and the Doctor."""
     ok, why = platform.supports("away")
-    return {"supported": ok, "why": why, "on": STATE["want"], "phase": STATE["phase"], "auth_url": STATE["auth_url"],
+    if not OFFERED:
+        ok, why = False, NOT_OFFERED_WHY
+    return {"supported": ok, "why": why, "offered": OFFERED, "on": STATE["want"], "phase": STATE["phase"], "auth_url": STATE["auth_url"],
             "approve_url": STATE["approve_url"], "link": f"https://{STATE['host']}" if STATE["phase"] == "ready" else None,
             "host": STATE["host"], "error": STATE["error"], "progress": STATE["progress"],
             "downloaded": have_binaries(), "name": node_name() if state_dir().exists() else None,

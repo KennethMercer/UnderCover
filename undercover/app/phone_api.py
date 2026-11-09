@@ -251,8 +251,11 @@ AWAY_PORTS = range(7870, 7880)
 
 
 def away_open():
-    """The away listener on loopback (the first free port of AWAY_PORTS), then Tailscale toward it."""
+    """The away listener on loopback (the first free port of AWAY_PORTS), then Tailscale toward it. Nothing while the
+    link isn't offered in this release (tailnet.OFFERED)."""
     from ..core import tailnet
+    if not tailnet.OFFERED:
+        return
     with _LLOCK:
         if _A["srv"] is None:
             if _A["make"] is None:
@@ -300,7 +303,8 @@ def state() -> dict:
         tidy_lan()
     link = snap["link"] if on else None
     p = phone.pairing()
-    out = {"enabled": on, "supported": snap["supported"], "why": snap["why"], "phase": snap["phase"] if on else "off",
+    out = {"enabled": on, "supported": snap["supported"], "why": snap["why"], "offered": snap["offered"],
+           "phase": snap["phase"] if on else "off",
            "progress": snap["progress"] if on else None, "error": snap["error"] if on else "",
            "auth_url": snap["auth_url"] if on and snap["phase"] == "sign-in" else None,
            "approve_url": snap["approve_url"] if on and snap["phase"] == "approve" else None,
@@ -393,6 +397,9 @@ def _route(h, method, p):
         return h._json(state())
     if p == "/api/phone":
         on = bool(b.get("on"))
+        from ..core import tailnet
+        if on and not tailnet.OFFERED and not phone.enabled():   # (a copy from before with it on keeps its phones)
+            raise PhoneError(tailnet.NOT_OFFERED_WHY, 409)
         phone.set_enabled(on)
         if on:
             _A["problem"] = None

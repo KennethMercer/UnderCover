@@ -472,6 +472,7 @@ const mmss = t => `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 function renderPhone() {
   const s = PH.st, p = s.pairing, ready = s.enabled && s.phase === "ready";
   $("#set-phone-say").textContent = !s.supported ? s.why : "Use UnderCover from your phone, at home or away. One link works for both.";
+  $("#set-phone-row").hidden = s.offered === false && !s.enabled;   // (a release without the phone link: no setup at all)
   $("#phone-setup").hidden = s.enabled;
   $("#phone-setup").disabled = !s.supported;
   $("#phone-box").hidden = !s.enabled;
@@ -481,8 +482,9 @@ function renderPhone() {
   if (s.phase === "fetching" && s.progress && s.progress.total) say += ` ${Math.round(100 * s.progress.done / s.progress.total)}%`;
   const retry = !s.problem && s.error ? (PHONE_NET.test(s.error) ? "No internet right now; trying again." : "Trying again.") : "";
   say = s.problem || [say, retry].filter(Boolean).join(" ");
+  if (s.offered === false) say = s.why;   // (switched on before: its phones on the home Wi-Fi, no link)
   const step = $("#phone-step"), deep = document.createElement("span");
-  deep.className = "kv2"; deep.dataset.deep = ""; deep.textContent = !s.problem && s.error ? ` (${s.error})` : "";
+  deep.className = "kv2"; deep.dataset.deep = ""; deep.textContent = !s.problem && s.error && s.offered !== false ? ` (${s.error})` : "";
   step.hidden = !say; step.replaceChildren(say, deep);
   const si = $("#phone-signin"), ap = $("#phone-approve");
   si.hidden = !s.auth_url; if (s.auth_url) si.href = s.auth_url;
