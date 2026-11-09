@@ -2035,6 +2035,13 @@ def u_tailnet_pipe():
     with isolated_data():
         sd = tailnet.state_dir()
         assert tailnet._pipe_key() == "" and tailnet._socket() and not sd.exists(), "asking for the pipe made the state folder (it came back after Forget)"
+        ran, real_rt = [], P.run_text
+        P.run_text = lambda cmd, **kw: ran.append(cmd) or ""
+        try:
+            tailnet.stop()
+            assert tailnet.status() == {} and ran == [], "with no key the CLI still ran (a name anyone can work out)"
+        finally:
+            P.run_text = real_rt
         k = tailnet._pipe_key(create=True)   # (the daemon's start makes it)
         assert re.fullmatch(r"[0-9a-f]{32}", k) and tailnet._pipe_key() == k and (sd / "uc-pipe").is_file()
         assert "_socket(create=True)" in inspect_src(tailnet._start_daemon)
