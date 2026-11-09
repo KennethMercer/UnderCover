@@ -7449,6 +7449,19 @@ def u_fresh_keys():
     return f"{len(FRESH_KEYS)} keys, one list in all four places; run_project's reset drops the refine plan"
 
 
+@check("bugs-da 2: a save whose every test conversion came out silent (content None) never stops a training at its save: it scores no words, and the best pick carries on")
+def u_pick_silent():
+    from undercover.doubleagent.trainer import Trainer
+    st = {"saves": [{"epoch": 10, "identity": 0.8, "content": 0.9, "cents": 20.0},
+                    {"epoch": 20, "identity": 0.0, "content": None, "cents": None}]}
+    Trainer._pick_best(None, st)
+    assert st["best"] == 10, st
+    st = {"saves": [{"epoch": 10, "identity": 0.0, "content": None, "cents": None}]}   # (every save silent: still picks)
+    Trainer._pick_best(None, st)
+    assert st["best"] == 10, st
+    return "best stays 10 beside a silent save"
+
+
 @contextlib.contextmanager
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
@@ -15439,7 +15452,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
-               u_fresh_keys):
+               u_fresh_keys, u_pick_silent):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

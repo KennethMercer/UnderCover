@@ -689,9 +689,10 @@ class Trainer:
             probed = [s for s in probed if s.get("test", "speech") == probed[-1].get("test", "speech")]
         if not probed:
             return
-        top_c = max(s["content"] for s in probed)
+        content = lambda s: s.get("content") or 0.0   # (None: every test conversion came out silent or broken)
+        top_c = max(content(s) for s in probed)
         top_p = min(s["cents"] for s in probed if s.get("cents") is not None) if any(s.get("cents") is not None for s in probed) else None
-        ok = [s for s in probed if s["content"] >= top_c - 0.02 and (top_p is None or s.get("cents") is None or s["cents"] <= top_p + 10)]
+        ok = [s for s in probed if content(s) >= top_c - 0.02 and (top_p is None or s.get("cents") is None or s["cents"] <= top_p + 10)]
         st["best"] = max(ok or probed, key=lambda s: s["identity"])["epoch"]
         st["best_by"] = "conversion test"
 
