@@ -46,15 +46,17 @@ for ext, mt in ((".flac", "audio/flac"), (".mp3", "audio/mpeg"), (".wav", "audio
 
 
 def code_stamp() -> float:
-    """Newest modification time of the server's Python code and config. If it changes after startup, the
-    running process is out of date (Python doesn't reload code), and the page tells the user to restart.
+    """Newest modification time of the server's Python code and its shipped defaults. If it changes after startup, the
+    running process is out of date (Python doesn't reload code), and the page tells the user to restart. The user's
+    config.toml is left out: every setting changed from the page writes it and takes effect at once, and with it in,
+    any change said "Restart needed" in every tab (the maintainers' notes, bug hunt 2026-11-08).
     The walk (about 110 files, 8 ms) is kept for CODE_STAMP_TTL seconds: /api/status is polled every 5 s per tab,
     and a "restart me" notice a few seconds late costs nothing (the maintainers' notes, efficiency)."""
     from ..core import config
     now = time.monotonic()
     if _CODE_STAMP["at"] is not None and now - _CODE_STAMP["at"] < CODE_STAMP_TTL:
         return _CODE_STAMP["value"]
-    files = list(PKG.rglob("*.py")) + [config.CONFIG_FILE, config.DEFAULT_FILE]
+    files = list(PKG.rglob("*.py")) + [config.DEFAULT_FILE]
     value = max((f.stat().st_mtime for f in files if f.exists()), default=0.0)
     _CODE_STAMP.update(at=now, value=value)
     return value

@@ -12913,6 +12913,26 @@ def u_perf_code_stamp():
     return f"kept {server.CODE_STAMP_TTL:.0f} s"
 
 
+@check("a setting changed from the page never says \"Restart needed\" (the code stamp leaves config.toml out)")
+def u_stamp_settings():
+    from undercover.app import server
+    from undercover.core import config, gamepause
+    saved = dict(server._CODE_STAMP)
+    try:
+        with isolated_data():
+            server._CODE_STAMP["at"] = None
+            start = server.code_stamp()
+            time.sleep(0.05)
+            gamepause.set_ask(False)   # (a Settings switch: writes the test's own config.toml)
+            config.set_values("ui", {"open_browser": "false"})
+            os.utime(config.CONFIG_FILE, (time.time() + 3600, time.time() + 3600))   # (newer than any code)
+            server._CODE_STAMP["at"] = None
+            assert server.code_stamp() == start, "a settings write changed the code stamp: every tab would say Restart needed"
+    finally:
+        server._CODE_STAMP.update(saved)
+    return "set_ask and set_values leave the stamp as it was"
+
+
 @check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")
 def u_perf_history():
     from undercover.frontman import history as hstore, pipeline
@@ -15401,7 +15421,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
