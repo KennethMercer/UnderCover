@@ -228,46 +228,46 @@ def remix(instrumental: Path, vocal: Path, original_vocal: Path, out: Path, song
     out.parent.mkdir(parents=True, exist_ok=True)
 
     tmp = Path(tempfile.mkdtemp(prefix="mix_", dir=path("cache_dir")))
-    if s.polish:
-        with timed("remix.polish") as rec:
-            polished = tmp / "vocal_polished.wav"
-            rec["eq"] = polish_vocal(vocal, original_vocal, polished)
-            vocal = polished
-    reverb = s.reverb
-    if reverb is None:  # auto: put back what de-reverb took out (none if it didn't run)
-        reverb = min(0.6, 10 ** ((lufs(reverb_ref) - lufs(original_vocal)) / 20)) if reverb_ref else 0.0
+    try:   # (a mix that fails anywhere leaves no mix_ folder behind)
+        if s.polish:
+            with timed("remix.polish") as rec:
+                polished = tmp / "vocal_polished.wav"
+                rec["eq"] = polish_vocal(vocal, original_vocal, polished)
+                vocal = polished
+        reverb = s.reverb
+        if reverb is None:  # auto: put back what de-reverb took out (none if it didn't run)
+            reverb = min(0.6, 10 ** ((lufs(reverb_ref) - lufs(original_vocal)) / 20)) if reverb_ref else 0.0
 
-    with timed("remix.measure", key=s.key, reverb=round(reverb, 3)):
-        vocal_gain = lufs(original_vocal) - lufs(vocal) + s.vocal_db
-        target = lufs(song) if (song and RCFG["match_song_loudness"]) else None
-        backing_gain = s.backing_db + ((lufs(backing_ref) - lufs(backing)) if (backing and backing_ref) else 0.0)
+        with timed("remix.measure", key=s.key, reverb=round(reverb, 3)):
+            vocal_gain = lufs(original_vocal) - lufs(vocal) + s.vocal_db
+            target = lufs(song) if (song and RCFG["match_song_loudness"]) else None
+            backing_gain = s.backing_db + ((lufs(backing_ref) - lufs(backing)) if (backing and backing_ref) else 0.0)
 
-    if s.key:   # pre-rendered (and cached) while the vocal was converting
-        instrumental = key_shifted(instrumental, s.key)
-    inputs = ["-i", str(instrumental), "-i", str(vocal)]
-    fmt = f"aresample={sr},aformat=sample_fmts=fltp:channel_layouts=stereo"
-    # Key changes use Rubber Band pre-rendered by key_shifted() (tempo unchanged; backing vocals keep their formants).
-    graph = [f"[0:a]{fmt}[inst]", f"[1:a]{fmt},volume={vocal_gain:.2f}dB[vox]"]
-    mix_in = ["[inst]"]
-    if reverb > 0:
-        inputs += ["-i", str(_reverb_ir(RCFG["reverb_seconds"], sr))]
-        graph += ["[vox]asplit[dry][wet_in]",
-                  f"[2:a]{fmt}[ir]",
-                  "[wet_in][ir]afir[wet]",
-                  f"[dry][wet]amix=inputs=2:weights=1 {reverb:.3f}:normalize=0:duration=first[voxr]"]
-        mix_in.append("[voxr]")
-    else:
-        mix_in.append("[vox]")
-    if backing:
-        idx = len(inputs) // 2
-        inputs += ["-i", str(backing)]
-        if s.key and not backing_ref:   # original backing: transpose with the song (formants kept), pre-rendered
-            inputs[-1] = str(key_shifted(backing, s.key, formant=True))
-        graph.append(f"[{idx}:a]{fmt},volume={backing_gain:.2f}dB[bk]")
-        mix_in.append("[bk]")
-    graph.append(f"{''.join(mix_in)}amix=inputs={len(mix_in)}:normalize=0:duration=first[mix]")
+        if s.key:   # pre-rendered (and cached) while the vocal was converting
+            instrumental = key_shifted(instrumental, s.key)
+        inputs = ["-i", str(instrumental), "-i", str(vocal)]
+        fmt = f"aresample={sr},aformat=sample_fmts=fltp:channel_layouts=stereo"
+        # Key changes use Rubber Band pre-rendered by key_shifted() (tempo unchanged; backing vocals keep their formants).
+        graph = [f"[0:a]{fmt}[inst]", f"[1:a]{fmt},volume={vocal_gain:.2f}dB[vox]"]
+        mix_in = ["[inst]"]
+        if reverb > 0:
+            inputs += ["-i", str(_reverb_ir(RCFG["reverb_seconds"], sr))]
+            graph += ["[vox]asplit[dry][wet_in]",
+                      f"[2:a]{fmt}[ir]",
+                      "[wet_in][ir]afir[wet]",
+                      f"[dry][wet]amix=inputs=2:weights=1 {reverb:.3f}:normalize=0:duration=first[voxr]"]
+            mix_in.append("[voxr]")
+        else:
+            mix_in.append("[vox]")
+        if backing:
+            idx = len(inputs) // 2
+            inputs += ["-i", str(backing)]
+            if s.key and not backing_ref:   # original backing: transpose with the song (formants kept), pre-rendered
+                inputs[-1] = str(key_shifted(backing, s.key, formant=True))
+            graph.append(f"[{idx}:a]{fmt},volume={backing_gain:.2f}dB[bk]")
+            mix_in.append("[bk]")
+        graph.append(f"{''.join(mix_in)}amix=inputs={len(mix_in)}:normalize=0:duration=first[mix]")
 
-    try:
         premix = tmp / "premix.wav"
         with timed("remix.mix"):
             _run(["-y", *inputs, "-filter_complex", ";".join(graph), "-map", "[mix]",

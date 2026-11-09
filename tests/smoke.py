@@ -8751,6 +8751,25 @@ def u_edits():
     assert (e["t0"], e["t1"], e["moved"]) == (6.0, 14.98, 'The end moved past "x4".'), e
     refused({"op": "octave", "part": "lead", "octave": 1, "words": [0, 5], "words_hash": pd["words_hash"]}, pd, 'near the end, at "w5"')   # never back past the start
     assert E.snap_points(np.zeros(16000, np.float32), None, [])["lead"] == []   # (nothing sung: no landing places made up)
+    # a mix that fails before it mixes (the polish, a loudness read) leaves no mix_ folder in the cache
+    with isolated_data():
+        from undercover.core.config import path
+        import undercover.frontman.remix as RX
+        real_polish = RX.polish_vocal
+        RX.polish_vocal = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("the polish went"))
+        try:
+            for s in (RX.MixSettings(polish=True), RX.MixSettings(polish=False, reverb=None)):
+                try:   # (no polish: the loudness of a file that isn't there fails)
+                    RX.remix(path("cache_dir") / "no-inst.flac", path("cache_dir") / "no-vox.flac", path("cache_dir") / "no-orig.flac",
+                             path("output_dir") / "x", s=s, reverb_ref=path("cache_dir") / "no-rev.flac")
+                    raise AssertionError("mixed")
+                except AssertionError:
+                    raise
+                except Exception:   # noqa: BLE001 - any failure will do
+                    pass
+                assert not list(path("cache_dir").glob("mix_*")), list(path("cache_dir").iterdir())
+        finally:
+            RX.polish_vocal = real_polish
     return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes, a kept chorus as the cover had it, intro and outro landings"
 
 
