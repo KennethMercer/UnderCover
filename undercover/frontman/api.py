@@ -108,6 +108,11 @@ def _upload(h):
         return h._error("The file was empty.")
     if n > UCFG["max_upload_mb"] * 1e6:
         return h._error(f"That file is over {UCFG['max_upload_mb']} MB.")
+    from ..core import storage
+    why = storage.start_writing()   # (refused while a Storage move runs; a move waits for it)
+    if why:
+        h.close_connection = True   # (the body isn't read)
+        return h._error(why, 409)
     up = path("uploads_dir")
     tmp = up / f"upload_{uuid.uuid4().hex}.part"
     sha = hashlib.sha256()
@@ -130,6 +135,7 @@ def _upload(h):
         h._json(meta)
     finally:
         tmp.unlink(missing_ok=True)   # moved into place by register_song when it worked
+        storage.done_writing()
 
 
 def _checked_options(h, body: dict, duration: float | None = None):
@@ -222,6 +228,17 @@ def _cover_again(h, item_id: str, body: dict):
                      "options": opts})
 
 
+def _signed(v) -> str:
+    """A stored octave or key for a label, "+2" or "+1.5": a cover's own settings hold a key as a float (2.0), or not at all."""
+    try:
+        f = float(v) if v not in (None, "") else 0.0
+        if not abs(f) < 100:   # (NaN and Infinity too: no key a cover sings)
+            return "+0"
+        return f"{int(f):+d}" if f.is_integer() else f"{f:+g}"
+    except (TypeError, ValueError, OverflowError):
+        return "+0"
+
+
 def _cover_octaves(h, item_id: str, body: dict):
     """Short previews of a finished cover at two octave / key settings (phase 22: when two octaves fit a voice about as
     well, the user picks by ear). Only octave and key change; the backing follows the lead's octave as in /again."""
@@ -238,7 +255,7 @@ def _cover_octaves(h, item_id: str, body: dict):
             return h._error(str(e))
         if "octave" in change and old.get("backing_octave") == old.get("octave"):
             change["backing_octave"] = change["octave"]
-        variants.append({"label": f"octave {change.get('octave', old.get('octave', 0)):+d}, key {change.get('key', old.get('key', 0)):+d}",
+        variants.append({"label": f"octave {_signed(change.get('octave', old.get('octave')))}, key {_signed(change.get('key', old.get('key')))}",
                          **change})
     if len(variants) != 2:
         return h._error("Give the two octave / key settings to compare.")
@@ -405,7 +422,14 @@ def _song_from_youtube(h, body: dict):
                 raise ValueError("That isn't a YouTube video. Search again.")
             r = songs.SongResult(id=vid, url=f"https://www.youtube.com/watch?v={vid}",
                                  **{k: body[k] for k in ("title", "raw_title", "channel", "duration")})
-        h._json(songs.download(r, register_song))
+        from ..core import storage
+        why = storage.start_writing()   # (refused while a Storage move runs; a move waits for it)
+        if why:
+            return h._error(why, 409)
+        try:
+            h._json(songs.download(r, register_song))
+        finally:
+            storage.done_writing()
     except (ModelError, ValueError, KeyError, TypeError) as e:
         h._error(str(e) if not isinstance(e, (KeyError, TypeError)) else "That song result is incomplete. Search again.")
 
