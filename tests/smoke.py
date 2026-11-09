@@ -12857,6 +12857,13 @@ def u_find_setting():
     for (const q of ["gpu", "memory"]) ok(`"${q}" finds Low profile`, names(q).includes("Low profile"));
     ok('"ome" finds nothing (words start)', !names("ome").length);
     ok('"zebra" finds nothing', !names("zebra").length);
+    // Storage's rows are found from the other rooms (IA G1, G2): a first-timer's words for files and space
+    const want = { "backup": "Vault", "back up": "Vault", "vault": "Vault", "where are my files": "Where your files live", "files": "Where your files live",
+                   "folder": "Where your files live", "move": "Where your files live", "storage": "Where your files live", "space": "Clean up",
+                   "clean": "Clean up", "delete": "Clean up" };
+    const missed = Object.entries(want).filter(([q, n]) => !names(q).includes(n)).map(([q]) => q);
+    ok(`Storage's rows answer a first-timer's words${missed.length ? " (missed: " + missed.join(", ") + ")" : ""}`, !missed.length);
+    ok("Storage's rows have find-words", $$("#room-storage .frow").every(r => (r.dataset.find || "").trim()));
     ok("the box is in Settings", $("#room-settings #sh-find") === box);
 
     type("away from home");
@@ -12893,6 +12900,12 @@ def u_find_setting():
     ok("Go there opens System with the search in it", R.room === "system" && $("#room-system #sh-find") === box && box.value === "gpu" && !gone(gpu) && gpu.classList.contains("sf-lit"));
     ok("focus lands in the room", document.activeElement === box || $("#room-system").contains(document.activeElement));
     ok("the room is folded", gone($("#sys-news")));
+    type("backup");
+    $$(".sf-hit").find(h => h.querySelector("b").textContent === "Vault").querySelector("button").click();
+    await wait(400);
+    const vrow = $('#room-storage [data-open="vault"]');
+    ok("Go there opens Storage and lights the Vault row", R.room === "storage" && vrow.classList.contains("sf-lit") && document.activeElement === vrow);
+    showRoom("system");
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     ok("Esc clears", box.value === "" && !$$(".sf-out").length && !$$("mark.sf-mark").length && $("#sh-find-x").hidden && $("#sh-find-more").children.length === 0);
   } catch (e) { out.push("BAD threw " + e); }
