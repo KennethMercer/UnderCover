@@ -5,14 +5,13 @@ Every module's GPU work is a Job run by `gpu_worker`, so the models stay loaded 
 """
 import os
 import queue
-import shutil
 import threading
 import time
 import traceback
 import uuid
 from pathlib import Path
 
-from .config import CONFIG, ROOT, path
+from .config import CONFIG, path
 
 
 class Cancelled(Exception):
@@ -509,38 +508,54 @@ def gpu_worker():
             STATUS["models"] = "ready"
     except Exception as e:  # warm-up failure shouldn't kill the server; the job will report it
         STATUS["models"] = "error: " + friendly(e, "loading models")
+    deferred: set = set()
     while True:
-        job, fn = GPU_QUEUE.get()
+        _take_one(deferred)
+
+
+DEFER_REST_S = 2.0   # the GPU worker's rest once every queued job has been looked at and none fits Low profile's cap
+
+
+def _take_one(deferred: set):
+    """The GPU worker's one turn: the next queued job runs, or (it doesn't fit Low profile's cap) goes to the back of
+    the queue. deferred: the ids put back since a job last ran; once every queued job is among them, the worker rests
+    DEFER_REST_S before looking again (two or more waiting jobs once went round a million times in 2 s, each look
+    enumerating processes and reading files: the maintainers' notes, bug hunt 2026-11-08)."""
+    job, fn = GPU_QUEUE.get()
+    try:
+        for gate in START_GATES:
+            gate(job)
+        CURRENT[0] = job
+        from . import gpu as G, lowprofile
+        go = lowprofile.before_job(job)   # (Low profile: freed, the whole limit for a training, a fit check)
+        if go is None:   # doesn't fit the cap (said): to the back of the queue, the jobs behind it run; looked at again
+            CURRENT[0] = None
+            deferred.add(job.id)
+            GPU_QUEUE.put((job, fn))
+            if len(deferred) >= GPU_QUEUE.qsize():   # (a whole pass and nothing fits: no spinning)
+                deferred.clear()
+                time.sleep(DEFER_REST_S)
+            return
+        deferred.clear()   # (something runs or ends: what fits may change, the waiting jobs are looked at afresh)
+        if go is False:
+            job.finish("cancelled", message="Cancelled.")
+            CURRENT[0] = None
+            return
+        G.reset_peak()
+        job.gpu_start_gb = (G.alloc_gb() or (None,))[0]   # what was already held when it started (models from before)
         try:
-            for gate in START_GATES:
-                gate(job)
-            CURRENT[0] = job
-            from . import gpu as G, lowprofile
-            go = lowprofile.before_job(job)   # (Low profile: freed, the whole limit for a training, a fit check)
-            if go is None:   # doesn't fit the cap (said): to the back of the queue, the jobs behind it run; looked at again
-                CURRENT[0] = None
-                GPU_QUEUE.put((job, fn))
-                if GPU_QUEUE.qsize() <= 1:
-                    time.sleep(2)   # (nothing else to run: no spinning)
-                continue
-            if go is False:
-                job.finish("cancelled", message="Cancelled.")
-                CURRENT[0] = None
-                continue
-            G.reset_peak()
-            job.gpu_start_gb = (G.alloc_gb() or (None,))[0]   # what was already held when it started (models from before)
-            try:
-                run_job(job, fn)
-            finally:
-                CURRENT[0] = None
-                job.gpu_peak_gb = G.peak_gb()   # the most graphics memory this job held (Low profile's measure)
-                job.gpu_alloc_gb = (G.alloc_gb() or (None, None))[1]   # of it, the most in tensors (the rest is cache)
-                lowprofile.after_job(job)
-        except BaseException as e:   # never let the only GPU thread die: later jobs would wait forever
-            try:
-                job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).", plain=False)
-            except Exception:
-                pass
+            run_job(job, fn)
+        finally:
+            CURRENT[0] = None
+            job.gpu_peak_gb = G.peak_gb()   # the most graphics memory this job held (Low profile's measure)
+            job.gpu_alloc_gb = (G.alloc_gb() or (None, None))[1]   # of it, the most in tensors (the rest is cache)
+            lowprofile.after_job(job)
+    except BaseException as e:   # never let the only GPU thread die: later jobs would wait forever
+        deferred.discard(job.id)   # (it's gone from the queue: it mustn't count toward a whole pass)
+        try:
+            job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).", plain=False)
+        except Exception:
+            pass
 
 
 def serve_between(before=None):
@@ -565,17 +580,17 @@ def run_job(job: "Job", fn):
     if STATUS.get("gpu_problem"):
         job.finish("error", message=STATUS["gpu_problem"])
         return
-    free = shutil.disk_usage(ROOT).free
-    if free < 3e9:   # separations, conversions and trainings write GBs; failing halfway leaves partial files
-        job.finish("error", message=f"Only {free / 1e9:.1f} GB free on drive {ROOT.anchor.rstrip(chr(92))}. "
+    from . import storage
+    low = storage.low_work_space()   # (separations, conversions and trainings write GBs where the working files,
+    if low:                          # covers and voices are: failing halfway leaves partial files)
+        job.finish("error", message=f"Only {low[1] / 1e9:.1f} GB free on drive {low[0]}. "
                                     "Free some space (Library → Clean up) and try again.")
         return
     if job.cancel:
         job.finish("cancelled", message="Cancelled.")
         return
-    from . import storage
     if storage.MOVING:   # SafeHouse is moving UnderCover's files: nothing may read or write them meanwhile
-        job.finish("error", message="UnderCover's files are being moved (SafeHouse → Storage). Try again when that's done.")
+        job.finish("error", message=storage.MOVING_WHY)
         return
     from . import worklist
     if job.kind in worklist.PAUSABLE and job.kind not in worklist.PARTLY_PAUSABLE and (job.pausing or worklist.held()):

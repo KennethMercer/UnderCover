@@ -830,7 +830,7 @@ def u_gamepause():
             assert gp.before_start(job3, sleep=lambda _s: None, look=lambda: game) == "start"
             # the GPU worker asks the gates before every job, and says which job is on the GPU (what "busy" means)
             import inspect
-            src = inspect.getsource(jobs.gpu_worker)
+            src = inspect.getsource(jobs._take_one)   # (the GPU worker's one turn)
             assert src.index("gate(job)") < src.index("CURRENT[0] = job") < src.index("run_job(job, fn)"), "the gate isn't wired"
             assert not gp._gpu_busy()
         finally:
@@ -6715,6 +6715,64 @@ def u_lowprofile():
         L.STATE.update(saved_state)
         gamepause.STATE.update(game=None, asking=None, answer=None, paused_for=None, gone_since=None, reason="")
     return "defaults, test default, set(), the split, needs/waits/learns, batch, speeds, the pause, the game's on/off, the phone route"
+
+
+@check("Low profile: \"raise its limit and it starts\" holds: a cover that ran out under the cap retries under the raised "
+       "limit (applied when it fits, though a job was current); the wait never reads \"needs about 4 GB; allows 4\"")
+def u_lowprofile_retry():
+    import threading
+    from undercover.core import gpu, jobs, lowprofile as L
+    from undercover.core.cadence import client
+    saved_env = {k: os.environ.get(k) for k in ("UNDERCOVER_TEST_ROOTS", "UNDERCOVER_LOW_PROFILE")}
+    saved = (dict(jobs.STATUS), dict(L.STATE), jobs.CURRENT[0], client.WORKER.running,
+             {n: getattr(gpu, n) for n in ("apply_cap", "free", "release", "alloc_gb")})
+    caps, seen = [], []
+    try:
+        with isolated_data():
+            for k in saved_env:
+                os.environ.pop(k, None)
+            jobs.STATUS["vram_gb"] = 24
+            client.WORKER.running = lambda: False
+            gpu.apply_cap = lambda lim=None: caps.append(lim) or lim   # (what torch's share of the card would be set to)
+            for n in ("free", "release", "alloc_gb"):
+                setattr(gpu, n, lambda *a, **k: None)
+            L.STATE["applied"] = None
+            L.change(on=True, limit_gb=4)
+            assert caps[-1] == 4.0, caps
+
+            def cover(job):
+                seen.append(L.STATE["server_gb"])
+                if len(seen) == 1:
+                    raise RuntimeError("HIP out of memory")   # (the first try runs out under the 4 GB cap)
+                job.finish("done")
+            job = jobs.Job("cover")
+            jobs.CURRENT[0] = job
+            th = threading.Thread(target=jobs.run_job, args=(job, cover), daemon=True)
+            th.start()
+            assert wait_for(lambda: job.events and job.events[-1].get("waits_for") == "Low profile", 5, every=0.05,
+                            what="the wait for Low profile")
+            msg = job.events[-1]["message"]
+            assert "allows 4" in msg and "needs about 4 GB" not in msg, msg
+            L.change(limit_gb=12)   # the user raises the limit, as the message asks (a job is current: no apply here)
+            th.join(10)
+            assert not th.is_alive() and job.state == "done", job.state
+            assert seen == [4.0, 12.0] and caps[-1] == 12.0, f"the retry ran under {seen[-1]} GB; caps set {caps}"
+            assert L._needs_allows(4.04, 4.0) == "needs about 4.1 GB; Low profile allows 4"
+            assert L._needs_allows(8.7, 9.96) == "needs about 8.7 GB; Low profile allows 9.9"
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        jobs.STATUS.clear()
+        jobs.STATUS.update(saved[0])
+        L.STATE.clear()
+        L.STATE.update(saved[1])
+        jobs.CURRENT[0], client.WORKER.running = saved[2], saved[3]
+        for n, f in saved[4].items():
+            setattr(gpu, n, f)
+    return "the retry saw 12 GB; needs rounded up, the allowance down"
 
 
 @check("voice packs (1.1): a voice exports as one .ucvoice (safetensors weights, the compact index, a canonical manifest whose pack_id is its own SHA-256, the subject declared, the p2p fields reserved, no cadence) and imports back identical, staged, never over a voice; a pickle inside, a changed manifest, a file that isn't its SHA-256, a private person without consent, a newer format, all refused")
@@ -13015,6 +13073,301 @@ def u_perf_code_stamp():
     return f"kept {server.CODE_STAMP_TTL:.0f} s"
 
 
+@check("a setting changed from the page never says \"Restart needed\" (the code stamp leaves config.toml out)")
+def u_stamp_settings():
+    from undercover.app import server
+    from undercover.core import config, gamepause
+    saved = dict(server._CODE_STAMP)
+    try:
+        with isolated_data():
+            server._CODE_STAMP["at"] = None
+            start = server.code_stamp()
+            time.sleep(0.05)
+            gamepause.set_ask(False)   # (a Settings switch: writes the test's own config.toml)
+            config.set_values("ui", {"open_browser": "false"})
+            os.utime(config.CONFIG_FILE, (time.time() + 3600, time.time() + 3600))   # (newer than any code)
+            server._CODE_STAMP["at"] = None
+            assert server.code_stamp() == start, "a settings write changed the code stamp: every tab would say Restart needed"
+    finally:
+        server._CODE_STAMP.update(saved)
+    return "set_ask and set_values leave the stamp as it was"
+
+
+@check("a restart never cuts off unsaved work: a speech, a one-shot or an install is refused (Restart now offered); a "
+       "Storage move is refused even with now; a pause-restart waits for work started meanwhile; quit refuses the same")
+def u_restart_guard():
+    from types import SimpleNamespace
+    from undercover.app import server as S
+    from undercover.core import jobs, worklist
+    saved = (S.SERVER, dict(S.JOBS), worklist.active, worklist.pause_all, S.LATE_WORK_WAIT_S, worklist.restart_abandoned)
+    shut = []
+    S.SERVER = SimpleNamespace(shutdown=lambda: shut.append(1))
+
+    def call(route, body=None):
+        h = S.Handler.__new__(S.Handler)
+        out = {}
+        h._body = lambda: body or {}
+        h._json = lambda obj, status=200: out.update(obj=obj, status=status)
+        h._error = lambda msg, status=400: out.update(obj={"error": msg}, status=status)
+        getattr(S.Handler, route)(h)
+        return out["status"], out["obj"]
+
+    def only(*kinds):
+        S.JOBS.clear()
+        made = [jobs.Job(k, title=f"a {k}") for k in kinds]
+        for j in made:
+            S.JOBS[j.id] = j
+        return made
+    try:
+        with isolated_data():
+            S.RESTART.clear()
+            for kind in ("speech", "auto", "install", "cover", "presep", "train-export"):
+                only(kind)
+                st, obj = call("_restart")
+                assert st == 409 and obj.get("now_ok") and obj["busy"] == [f"a {kind}"], (kind, st, obj)
+                st, _ = call("_quit")
+                assert st == 409, (kind, "quit", st)
+            assert not S.RESTART.is_set() and not shut, "a refused restart restarted"
+            for kind in ("move", "addon", "smaller", "ytdlp"):
+                only(kind, "speech")
+                for body in (None, {"now": True}):
+                    st, obj = call("_restart", body)
+                    assert st == 409 and not obj.get("now_ok") and obj["busy"] == [f"a {kind}"], (kind, body, st, obj)
+                assert not any(j.cancel for j in S.JOBS.values()), f"a refused restart now cancelled work beside a {kind}"
+            assert not S.RESTART.is_set() and not shut
+            sp, = only("speech")
+            st, obj = call("_restart", {"now": True})   # the user chose "Restart now (stops running work)"
+            assert st == 200 and obj["stopped"] == ["a speech"] and sp.cancel, obj
+            assert S.RESTART.wait(2) and wait_for(lambda: shut, 3, every=0.05, what="the shutdown"), "Restart now didn't restart"
+            S.RESTART.clear()
+            shut.clear()
+            only("speakwarm", "voicepreview")   # (the engine warming, a preview line the backfill makes again)
+            assert call("_restart")[0] == 200 and S.RESTART.wait(2)
+            S.RESTART.clear()
+            wait_for(lambda: shut, 3, every=0.05, what="the shutdown")
+            shut.clear()
+            # voice work pauses first; a speech started while it pauses finishes before the restart, and meanwhile this
+            # process's worklist loop leaves "resume after restart" to the next one
+            S.JOBS.clear()
+            busy = [True]
+            worklist.active = lambda: busy[0]
+            worklist.pause_all = lambda **kw: {}
+            st, obj = call("_restart")
+            assert st == 200 and obj.get("pausing") and worklist.RESTARTING.is_set(), obj
+            saved_models = jobs.STATUS.get("models")
+            jobs.STATUS["models"] = "ready"
+            try:
+                assert not worklist._resume_due({"resume_after_restart": True, "resume": [], "held": True}), \
+                    "the running process would resume the work it paused to restart"
+                worklist.RESTARTING.clear()
+                assert worklist._resume_due({"resume_after_restart": True, "resume": [], "held": True}), "the new process wouldn't"
+                worklist.RESTARTING.set()
+            finally:
+                jobs.STATUS["models"] = saved_models
+            late, = only("speech")
+            busy[0] = False
+            time.sleep(1.5)
+            assert not S.RESTART.is_set(), "the restart didn't wait for the speech started while voice work paused"
+            late.finish("done")
+            assert S.RESTART.wait(4) and wait_for(lambda: shut, 3, every=0.05, what="the shutdown"), "the restart didn't follow the speech's end"
+            S.RESTART.clear()
+            shut.clear()
+            # work started meanwhile that doesn't finish in time: the restart is called off and the voice work carries on
+            called_off = []
+            worklist.restart_abandoned = lambda: called_off.append(1) or {}
+            S.LATE_WORK_WAIT_S = 1
+            busy[0] = True
+            assert call("_restart")[1].get("pausing")
+            stuck, = only("speech")
+            busy[0] = False
+            assert wait_for(lambda: called_off, 6, every=0.1, what="the restart called off")
+            assert not S.RESTART.is_set() and not shut and not stuck.cancel, "a restart cut off work that didn't finish"
+    finally:
+        S.RESTART.clear()
+        S.LATE_WORK_WAIT_S = saved[4]
+        worklist.RESTARTING.clear()
+        S.SERVER = saved[0]
+        S.JOBS.clear()
+        S.JOBS.update(saved[1])
+        worklist.active, worklist.pause_all, worklist.restart_abandoned = saved[2], saved[3], saved[5]
+    return "409 with now_ok for 6 kinds, 409 even with now for the 4 that can't stop halfway, waits for late work or calls it off"
+
+
+@check("the GPU worker rests when no waiting job fits Low profile's cap: two or three of them looked at under 10 times in 2 s, "
+       "not a million; a job that fits behind them still runs at once")
+def u_defer_rest():
+    import queue
+    import threading
+    from undercover.core import jobs, lowprofile
+    saved = (jobs.GPU_QUEUE, lowprofile.before_job, list(jobs.START_GATES), jobs.CURRENT[0])
+    looks, ran = [], []
+    try:
+        with isolated_data():
+            for n in (2, 3):
+                jobs.GPU_QUEUE = queue.Queue()
+                jobs.START_GATES[:] = []
+                lowprofile.before_job = lambda job: looks.append(job.id) and None   # (nothing fits the cap)
+                looks.clear()
+                for _ in range(n):
+                    jobs.GPU_QUEUE.put((jobs.Job("zz-smoke"), lambda j: None))
+                stop = threading.Event()
+
+                def turn():
+                    deferred = set()
+                    while not stop.is_set():
+                        jobs._take_one(deferred)
+                th = threading.Thread(target=turn, daemon=True)
+                th.start()
+                time.sleep(2.0)
+                stop.set()
+                seen = len(looks)
+                th.join(jobs.DEFER_REST_S + 2)
+                assert not th.is_alive()
+                assert n <= seen < 10, f"{seen} looks in 2 s with {n} waiting jobs (it spins)"
+            # one that fits, queued behind the waiting ones, runs on the next pass
+            jobs.GPU_QUEUE = queue.Queue()
+            wait = [jobs.Job("zz-smoke") for _ in range(2)]
+            go = jobs.Job("zz-smoke")
+            for j in (*wait, go):
+                jobs.GPU_QUEUE.put((j, lambda j: ran.append(j.id) or j.finish("done")))
+            lowprofile.before_job = lambda job: True if job is go else None
+            jobs.DEFER_REST_S, rest = 0.0, jobs.DEFER_REST_S
+            try:
+                d = set()
+                for _ in range(3):
+                    jobs._take_one(d)
+            finally:
+                jobs.DEFER_REST_S = rest
+            assert ran == [go.id] and jobs.GPU_QUEUE.qsize() == 2 and not d, (ran, jobs.GPU_QUEUE.qsize(), d)
+            # a waiting job that fails at its next look leaves the queue: it no longer counts toward a whole pass
+            jobs.GPU_QUEUE = queue.Queue()
+            bad = jobs.Job("zz-smoke")
+            jobs.GPU_QUEUE.put((bad, lambda j: None))
+            jobs.START_GATES[:] = [lambda job: 1 / 0]
+            d = {bad.id}
+            jobs._take_one(d)
+            assert bad.state == "error" and not d and jobs.GPU_QUEUE.empty(), (bad.state, d)
+    finally:
+        jobs.GPU_QUEUE, lowprofile.before_job = saved[0], saved[1]
+        jobs.START_GATES[:] = saved[2]
+        jobs.CURRENT[0] = saved[3]
+    return f"rests {jobs.DEFER_REST_S:.0f} s after a whole pass"
+
+
+@check("free space is judged where the work writes (after a Storage move, not the app's drive): the jobs' 3 GB guard, "
+       "Doctor and the Library's free line agree and name that drive")
+def u_work_space():
+    from types import SimpleNamespace
+    from undercover.core import config, doctor, jobs, storage
+    from undercover.safehouse import library
+    saved = (storage.shutil, storage.drive_of)
+    try:
+        with isolated_data() as t:
+            e = t / "E"   # (stands in for another drive: the working files, covers and voices moved there)
+            for k, sub in (("cache_dir", "cache"), ("output_dir", "output"), ("voices_dir", "voices")):
+                config.CONFIG["paths"][k] = str(e / sub)
+            free = {"E:": 100e9, "app": 1e9}
+            on_e = lambda p: storage._inside(Path(p), e)
+            storage.drive_of = lambda p: "E:" if on_e(p) else saved[1](p)
+            storage.shutil = SimpleNamespace(disk_usage=lambda p: SimpleNamespace(free=free["E:" if on_e(p) else "app"]))
+            assert storage.low_work_space() is None, "1 GB on the app's drive refused work that writes to E: (100 GB)"
+            job = jobs.Job("zz-smoke")
+            jobs.run_job(job, lambda j: j.finish("done"))
+            assert job.state == "done", job.events[-1:]
+            lib = library._summary()
+            assert lib["drive"] == "E:" and lib["free"] == 100e9, (lib["drive"], lib["free"])
+            res = {r["id"]: r for r in doctor.c_disk(None)}   # (songs and models on the full drive: bad, but no job refuses)
+            other = [r for k, r in res.items() if k != "disk:E:"]
+            assert res["disk:E:"]["state"] == "ok" and other and all(r["state"] == "bad" and "refuse" not in r["say"]
+                                                                     for r in other), res
+            from undercover.app import server as S
+            assert S._hb_state()["disk_free_gb"] == 100.0, "the heartbeat records the app's drive, not the work's"
+            free.update({"E:": 1e9, "app": 100e9})
+            assert storage.low_work_space() == ("E:", 1e9)
+            job = jobs.Job("zz-smoke")
+            jobs.run_job(job, lambda j: j.finish("done"))
+            assert job.state == "error" and "1.0 GB free on drive E:" in job.events[-1]["message"], job.events[-1:]
+            res = {r["id"]: r for r in doctor.c_disk(None)}
+            assert res["disk:E:"]["state"] == "bad" and "refuse" in res["disk:E:"]["say"], res
+            assert all(r["state"] != "bad" and "refuse" not in r["say"] for k, r in res.items() if k != "disk:E:"), res
+            assert library._summary()["drive"] == "E:"
+    finally:
+        storage.shutil, storage.drive_of = saved
+        library.invalidate()
+    return "E: judged, named by the guard, Doctor and the Library"
+
+
+@check("while a Storage move runs, a dropped song or voice, a song from YouTube, a voice install, a training recording and a theme save, import or delete are refused (409, "
+       "nothing written, the body left unread); an upload under way holds a move back")
+def u_upload_moving():
+    import io
+    from types import SimpleNamespace
+    from undercover.app import server as S
+    from undercover.core import config, storage
+    from undercover.frontman import api as F, songs
+    saved = (dict(storage.MOVING), dict(storage._WRITES), songs.download, dict(S.JOBS))
+    fetched = []
+
+    def handler(cls=None, headers=None, body=b""):
+        h = S.Handler.__new__(S.Handler) if cls else SimpleNamespace()
+        out = {}
+        h.headers = headers or {}
+        h.rfile = io.BytesIO(body)
+        h.close_connection = False
+        h._length = lambda: len(body)
+        h._json = lambda obj, status=200: out.update(obj=obj, status=status)
+        h._error = lambda msg, status=400: out.update(obj={"error": msg}, status=status)
+        return h, out
+    try:
+        with isolated_data():
+            up = config.path("uploads_dir")
+            up.mkdir(parents=True, exist_ok=True)
+            songs.download = lambda *a, **k: fetched.append(a) or {}
+            storage.MOVING.update(group="library", job="x")
+            h, out = handler(headers={"X-Filename": "song.mp3"}, body=b"\0" * 4096)
+            F._upload(h)
+            assert out["status"] == 409 and "being moved" in out["obj"]["error"] and h.close_connection, out
+            assert h.rfile.tell() == 0 and not any(up.iterdir()), "the song was read or written during the move"
+            h, out = handler()
+            F._song_from_youtube(h, {"id": "dQw4w9WgXcQ", "title": "t", "raw_title": "t", "channel": "c", "duration": 1})
+            assert out["status"] == 409 and not fetched, out
+            h, out = handler(cls=True, headers={"X-Filename": "v.zip"}, body=b"PK" + b"\0" * 100)
+            h._voice_upload()
+            assert out["status"] == 409 and h.close_connection and h.rfile.tell() == 0, out
+            h, out = handler(cls=True)
+            before = len(S.JOBS)
+            h._start_install({"url": "https://huggingface.co/x/y/resolve/main/v.zip", "name": "v"})
+            assert out["status"] == 409 and len(S.JOBS) == before, out
+            from undercover.app import themes_api
+            from undercover.doubleagent import api as DA
+            h, out = handler(headers={"X-Filename": "take.wav"}, body=b"\0" * 4096)   # (a recording for a training)
+            DA._upload(h, None, {})
+            assert out["status"] == 409 and h.close_connection and h.rfile.tell() == 0, out
+            for method, route in (("POST", "/api/themes/import"), ("POST", "/api/themes"), ("DELETE", "/api/themes/my-theme")):
+                h, out = handler(body=b"PK" + b"\0" * 100)
+                assert themes_api.handle(h, method, route) and out["status"] == 409 and h.rfile.tell() == 0, (route, out)
+            h, out = handler()
+            assert themes_api.handle(h, "GET", "/api/themes") and out["status"] == 200, "reading the themes was refused"
+            assert storage._WRITES["n"] == 0, storage._WRITES
+            # the other way round: an upload under way, and a move waits for it
+            storage.MOVING.clear()
+            assert storage.start_writing() is None
+            try:
+                assert storage._busy() == "the file being added", storage._busy()
+            finally:
+                storage.done_writing()
+            assert storage._busy() != "the file being added" and storage._WRITES["n"] == 0
+    finally:
+        storage.MOVING.clear()
+        storage.MOVING.update(saved[0])
+        storage._WRITES.clear()
+        storage._WRITES.update(saved[1])
+        songs.download = saved[2]
+        S.JOBS.clear()
+        S.JOBS.update(saved[3])
+    return "seven routes refused with the move's own words; a move waits for an upload"
+
+
 @check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")
 def u_perf_history():
     from undercover.frontman import history as hstore, pipeline
@@ -15498,12 +15851,12 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_jobs_burst, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

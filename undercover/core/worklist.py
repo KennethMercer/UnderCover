@@ -589,12 +589,36 @@ def _gpu_idle() -> bool:
     return jobs.GPU_QUEUE.empty() and not any(not j.finished for j in list(jobs.JOBS.values()))
 
 
+# set by the server while it pauses voice work to restart: the resume belongs to the next process. Without it this
+# process's loop took "resume after restart" within 10 s and started the work again, and the restart then ended it
+# (the maintainers' notes, bug hunt 2026-11-08)
+RESTARTING = threading.Event()
+
+
+def restart_abandoned() -> dict:
+    """A pause-restart that won't happen (other work didn't finish in time): the voice work carries on here."""
+    with _LOCK:
+        _state().pop("resume_after_restart", None)
+        _save()
+    RESTARTING.clear()
+    return resume_all()
+
+
+def _resume_due(st: dict) -> bool:
+    """Paused only to restart (in the new process), or paused work left without a hold: carry on."""
+    if jobs.STATUS.get("models") != "ready":
+        return False
+    if st.get("resume_after_restart"):
+        return not RESTARTING.is_set()
+    return bool(st["resume"]) and not st["held"]
+
+
 def _loop():
     awake = False
     while True:
         try:
             st = _state()
-            if jobs.STATUS.get("models") == "ready" and (st.get("resume_after_restart") or (st["resume"] and not st["held"])):
+            if _resume_due(st):
                 # paused only to restart (or paused work left without a hold): carry on
                 with _LOCK:
                     st.pop("resume_after_restart", None)
