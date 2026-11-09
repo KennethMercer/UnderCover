@@ -10007,6 +10007,27 @@ def u_leadgate():
         said = G.note(g, "top", backing_converted=True, missing=gone)
         assert said and not any("top voice was converted" in s for s in said) and any("and have no top voice to move" in s and "backing's voice" in s for s in said), said
         assert any("top voice was converted" in s for s in G.note(g, "top", missing=[]))
+        # a write cut off part way (a kill, a full disk) leaves no gate stem that a later edit would take as made
+        real_write = sf.write
+
+        def cut_off(f, data, *a, **k):
+            if "gate_lead_" in str(f):
+                real_write(f, data[:len(data) // 3], *a, **k)
+                raise OSError("the disk is full")
+            return real_write(f, data, *a, **k)
+        sf.write = cut_off
+        try:
+            G.apply(stems, g, tmp, "cut")
+            raise AssertionError("written")
+        except OSError:
+            pass
+        finally:
+            sf.write = real_write
+        assert not (tmp / "gate_lead_cut.flac").exists() and not list(tmp.glob("*.part*")), list(tmp.iterdir())
+        from undercover.frontman import pipeline as _PLk, remix as _RXg, songs as _SGg
+        _src = __import__("inspect").getsource   # the other files whose being there is their proof: whole or not at all
+        assert "fsutil.write_text(cache," in _src(_PLk.song_key)
+        assert "fsutil.write_text(up /" in _src(_SGg.register_song) and "os.replace(part, p)" in _src(_RXg._reverb_ir)
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
     assert any("left to the original singers" in s for s in G.note(g, "keep"))
     said = G.note(g, "keep", backing_converted=True)   # (a backing sung by a voice: the lines in it are sung by that voice too)

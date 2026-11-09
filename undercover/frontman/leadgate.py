@@ -13,9 +13,12 @@ cover kept the original singer there. So, per 2 s window (0.5 s steps):
 
 Plain numpy on the separated stems; the plan is in seconds, applied to the stems at their own rate with short fades.
 """
+import os
 from pathlib import Path
 
 import numpy as np
+
+from ..core.fsutil import retry
 
 SR = 16000
 WIN, HOP = 2.0, 0.5
@@ -122,6 +125,19 @@ def _mask(ranges, n: int, sr: int) -> np.ndarray:
     return m
 
 
+def _write(p: Path, x: np.ndarray, sr: int):
+    """A stem written whole or not at all: to a .part beside it, then swapped in (a kill mid-write leaves no cut-off stem that a
+    later edit would take as made; the lead, written last, is the proof the rest are there)."""
+    import soundfile as sf
+    part = p.with_name(f"{p.stem}.{os.getpid()}.part{p.suffix}")
+    try:
+        sf.write(str(part), np.clip(x, -1, 1), sr, subtype="PCM_24")
+        retry(lambda: os.replace(part, p))
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+
+
 CHORUS_MODES = ("convert", "top", "keep")
 # What happens to lines the karaoke split put in the backing stem while the lead is silent (phase 22): "convert" moves
 # all of it into the conversion (phase 15; on Toxic's stacked choruses the user heard it as "atrocious": RVC follows
@@ -197,7 +213,7 @@ def apply(stems: dict, gate: dict, work: Path, stamp: str, chorus: str = "conver
         inst2 = inst.copy()
         inst2[:m] += lead[:m] * mi[:m] if lead.shape[1] == inst.shape[1] else lead[:m].mean(1, keepdims=True) * mi[:m]
         p = work / f"gate_instrumental_{stamp}.flac"
-        sf.write(str(p), np.clip(inst2, -1, 1), sr, subtype="PCM_24")
+        _write(p, inst2, sr)
         out["instrumental"] = p
     if back is not None:
         m = min(len(back), n)
@@ -217,10 +233,10 @@ def apply(stems: dict, gate: dict, work: Path, stamp: str, chorus: str = "conver
             new_lead[:m] += fit(back[:m]) * mc
             back2[:m] *= (1 - mc)
         p = work / f"gate_backing_{stamp}.flac"
-        sf.write(str(p), np.clip(back2, -1, 1), sr, subtype="PCM_24")
+        _write(p, back2, sr)
         out["backing"] = p
     p = work / f"gate_lead_{stamp}.flac"
-    sf.write(str(p), np.clip(new_lead, -1, 1), sr, subtype="PCM_24")
+    _write(p, new_lead, sr)
     out["vocals"] = p
     return out
 

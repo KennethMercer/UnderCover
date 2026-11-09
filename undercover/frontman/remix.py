@@ -153,7 +153,9 @@ def _reverb_ir(seconds: float, sr: int) -> Path:
     pre = int(0.02 * sr)                                 # 20 ms pre-delay
     ir = np.vstack([np.zeros((pre, 2)), ir])
     ir /= np.sqrt((ir ** 2).sum(axis=0, keepdims=True))  # unit energy per channel
-    sf.write(str(p), ir.astype(np.float32), sr, subtype="FLOAT")
+    part = p.with_name(f"{p.stem}.{os.getpid()}.part{p.suffix}")   # (whole or not at all: the file's being there is its proof)
+    sf.write(str(part), ir.astype(np.float32), sr, subtype="FLOAT")
+    os.replace(part, p)
     return p
 
 
