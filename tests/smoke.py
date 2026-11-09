@@ -7704,6 +7704,25 @@ def u_lead_pause():
     return "lead 2.0 s on the first piece; kept by join and split; both readings"
 
 
+@check("bugs-da side note: sentences left out for not being in English are counted and said once under the result (they used to vanish without a word); a text with nothing in English says so")
+def u_not_english():
+    import inspect
+    from undercover.speakeasy import speak, tags, tts
+    sents = tts.sentences("Hello there, friend.\n\nПривет, как дела?\n\nこんにちは。\n\nGood night [pause 2s] everyone.")
+    ps = tags.directions(sents)[0]
+    assert all(any(c.isascii() and c.isalpha() for c in p["text"]) for p in ps), ps
+    assert tags.not_english(sents) == 2 and tags.not_english(tts.sentences("Just English [pause], 42 times.")) == 0
+    with isolated_data():
+        speak.speech_dir()
+        m = {"id": "abcdef0123", "file": "x.flac", "not_english": 2}
+        assert speak._item(m)["not_english"] == 2 and speak._item({**m, "not_english": None})["not_english"] == 0
+    src = inspect.getsource(speak.make_speech) + inspect.getsource(speak._save)
+    assert '"not_english": tags.not_english(raw)' in src and '"not_english": int(p.get("not_english") or 0)' in src
+    js = (ROOT / "undercover" / "web" / "speakeasy.js").read_text(encoding="utf-8")
+    assert "ev.result.not_english" in js and "not in English" in js
+    return "2 of 4 paragraphs counted; said under the result"
+
+
 @contextlib.contextmanager
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
@@ -15694,7 +15713,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
-               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut, u_lead_pause):
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut, u_lead_pause, u_not_english):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

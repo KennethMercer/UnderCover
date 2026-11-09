@@ -197,10 +197,12 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
     p = plan(voice, reader, speed, nudge, cadence, pace, v=v)
     # the text's directions ([pause], [louder], ... and a cadence engine's own tags the ear passed) become fields
     known = tags.engine_tags(p.get("engine")) if p["mode"] == "cadence" else frozenset()
-    sents, unknown, held = tags.directions(tts.sentences(text), known)
-    p = {**p, "known_tags": sorted(known), "unknown_tags": unknown, "held_tags": held, "seed": int(seed)}
+    sents, unknown, held = tags.directions(raw := tts.sentences(text), known)
+    p = {**p, "known_tags": sorted(known), "unknown_tags": unknown, "held_tags": held, "seed": int(seed),
+         "not_english": tags.not_english(raw)}
     if not sents:
-        raise SpeakError("There's nothing to read in that text.")
+        raise SpeakError("SpeakEasy reads English only, and nothing in that text is." if p["not_english"]
+                         else "There's nothing to read in that text.")
     if p["mode"] == "cadence":
         return _make_cadence(job, text, sents, p, save)
     t0 = time.perf_counter()
@@ -595,7 +597,7 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "duration": round(len(y) / sr, 2), "sr": sr, "seconds": seconds,
             "job": job_id, "finished": round(time.time(), 3), "seed": p.get("seed", SEED),
             "directions_unknown": p.get("unknown_tags") or [],
-            "directions_held": p.get("held_tags") or []}
+            "directions_held": p.get("held_tags") or [], "not_english": int(p.get("not_english") or 0)}
     with LOCK:
         fsutil.write_text(d / f"{sid}.json", json.dumps(meta, indent=1))
         try:
@@ -671,6 +673,7 @@ def _item(m: dict) -> dict:
     return {**{k: m.get(k) for k in ("id", "title", "text", "voice", "reader", "reader_auto", "speed", "pitch", "created",
                                       "duration", "seconds", "file", "mp3", "mode", "engine", "pace", "kept_at")},
             "directions_unknown": m.get("directions_unknown") or [], "directions_held": m.get("directions_held") or [],
+            "not_english": int(m.get("not_english") or 0),
             "kept": bool(m.get("kept")), "url": file_url(wav), "mp3_url": file_url(mp3) if mp3 and mp3.exists() else None, "size": size,
             "format": wav.suffix[1:].upper() + (" + MP3" if mp3 and mp3.exists() else "")}
 

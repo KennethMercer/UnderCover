@@ -136,6 +136,13 @@ def directions(sents: list, known: frozenset = frozenset()) -> tuple[list, list,
     return out, unknown, held
 
 
+def not_english(sents: list) -> int:
+    """How many of SpeakEasy's sentences have words but none in English letters (another script): directions() leaves
+    them out, as the readers read English only, and the result says so."""
+    words = [_TAG.sub(" ", s["text"]) for s in sents]
+    return sum(1 for w in words if re.search(r"[^\W\d_]", w) and not re.search(r"[A-Za-z0-9]", w))
+
+
 def spoken(text: str, known: frozenset) -> tuple[str, bool]:
     """The words a listener should hear in a piece's text (the engine's tags out), and whether it carries one."""
     t = _TAG.sub(lambda m: " " if _name(m.group(1), known) in known else m.group(0), text)
