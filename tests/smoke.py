@@ -16016,7 +16016,16 @@ def u_body_close():
     app = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
     train = (ROOT / "undercover" / "web" / "train.js").read_text(encoding="utf-8")
     assert "async function uploadLost(fallback)" in app and app.count("await uploadLost(") == 2 and "await uploadLost(" in train
-    return "an unread body ends the connection; a read one keeps it; a dropped upload during a move says the move"
+    import ast   # a merge can leave a method twice in one class, the second silently replacing the first (11-08)
+    twice = []
+    for f in sorted((ROOT / "undercover").rglob("*.py")):
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ClassDef):
+                names = [n.name for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         and not any(isinstance(d, ast.Attribute) and d.attr in ("setter", "deleter") for d in n.decorator_list)]
+                twice += [f"{f.name}:{node.name}.{n}" for n in set(names) if names.count(n) > 1]
+    assert not twice, f"a method defined twice in one class: {twice}"
+    return "an unread body ends the connection; a read one keeps it; a dropped upload during a move says the move; no method twice"
 
 
 @check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
