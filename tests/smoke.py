@@ -13239,6 +13239,106 @@ def u_perf_static():
     return f"index {len(body) // 1024} KB, gzip {len(page.gzipped()) // 1024} KB; 304 with no body, kept-alive after it"
 
 
+class _CountingModels:
+    """Stand-ins for RMVPE, HuBERT, the converter and the speaker embedder that count their calls (perf2's checks)."""
+
+    def __init__(self):
+        import torch
+        self.calls = {"f0": 0, "hubert": 0, "embed": 0, "convert": 0}
+        self.device, self.half = torch.device("cpu"), False
+        outer = self
+
+        class Rmvpe:
+            def infer_from_audio(self, x, thred=0.03, one_line=False):
+                import numpy as np
+                outer.calls["f0"] += 1
+                return np.where(np.abs(x[::160]) > 1e-4, 110.0 + 10 * np.abs(x[::160]), 0.0).astype(np.float32)
+
+        class Hubert:
+            def extract(self, wav, version):
+                outer.calls["hubert"] += 1
+                w = wav[0].float()
+                n = w.shape[0] // 320
+                return w[: n * 320].reshape(1, n, 320)[..., :8] + (0.5 if version == "v1" else 0.0)
+        self.rmvpe, self.hubert = Rmvpe(), Hubert()
+        self.model_key = ("fake-embedder",)
+
+    def convert(self, x, voice, s=None):
+        import numpy as np
+        self.calls["convert"] += 1
+        return (np.asarray(x, np.float32) * 0.9 + 0.001 * len(str(voice))), 16000
+
+    def embed(self, x):
+        import numpy as np
+        self.calls["embed"] += 1
+        v = np.array([np.abs(x).mean(), x.std(), np.abs(np.diff(x)).mean(), 1.0], np.float32)
+        return v / np.linalg.norm(v)
+
+
+@check("perf: a voice check works out the voice-independent side once (pitch, prints, features, the person's range); a re-cut clip misses")
+def u_perf_voicecheck():
+    import tempfile
+    import numpy as np
+    import threading
+    from types import SimpleNamespace
+    import soundfile as sf
+    from undercover.doubleagent import voicecheck as vc
+    m = _CountingModels()
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:
+        clips = Path(td)
+        rng = np.random.default_rng(3)
+        phrases = []
+        for i in range(3):
+            sf.write(str(clips / f"c{i}.wav"), (0.3 * np.sin(np.arange(16000 * 3) / 16000 * 2 * np.pi * (120 + 10 * i))).astype(np.float32), 16000)
+            phrases.append(SimpleNamespace(id=f"c{i}", dur=3.0, score=1.0 - i / 10))
+        proj = SimpleNamespace(training_phrases=lambda: phrases, clip_path=lambda pid: clips / f"{pid}.wav")
+        tests = ([(0.2 * rng.standard_normal(16000 * 3)).astype(np.float32) for _ in range(4)],
+                 np.array([0.5, 0.5, 0.5, 0.5], np.float32), "speech")
+        vc._INPUT.clear()
+        vc._RANGE.clear()
+        q1 = vc.check("voice-a", proj, m, m, tests=tests).to_json()
+        first = dict(m.calls)
+        assert first == {"f0": 3 + 2 * 4, "hubert": 2 * 4, "embed": 2 * 4, "convert": 4}, first
+        q2 = vc.check("voice-a", proj, m, m, tests=tests).to_json()
+        again = {k: m.calls[k] - first[k] for k in m.calls}
+        assert again == {"f0": 4, "hubert": 4, "embed": 4, "convert": 4}, f"the input side was worked out again: {again}"
+        assert q1 == q2, (q1, q2)
+        fresh = ([x.copy() for x in tests[0]], tests[1], "speech")   # the same samples in new arrays (a one-shot's
+        n0 = dict(m.calls)                                               # next candidate): kept by content
+        vc.check("voice-b", proj, m, m, tests=fresh)
+        assert m.calls["f0"] - n0["f0"] == 4 and m.calls["embed"] - n0["embed"] == 4, "new arrays of the same phrases missed"
+        f = vc._phrase_f0(m.rmvpe, tests[0][0])
+        f[:] = -1   # a caller's copy: never the kept one
+        assert (vc._phrase_f0(m.rmvpe, tests[0][0]) >= 0).all(), "a caller's change reached the kept pitch track"
+        time.sleep(0.02)
+        sf.write(str(clips / "c0.wav"), np.zeros(16000 * 3, np.float32) + 0.01, 16000)   # a clip re-cut: its range again
+        n1 = m.calls["f0"]
+        vc.target_range(proj, m.rmvpe)
+        assert m.calls["f0"] - n1 == 3, "a changed clip's pitch came from the memo"
+        vc.target_range(proj, m.rmvpe)
+        assert m.calls["f0"] - n1 == 3, "an unchanged range was read again"
+        out, errors = [], []
+
+        def run():
+            try:
+                out.append(vc.check("voice-a", proj, m, m, tests=tests).to_json()["score"])
+            except Exception as e:   # noqa: BLE001
+                errors.append(e)
+        vc._INPUT.clear()
+        ts = [threading.Thread(target=run) for _ in range(6)]
+        for t_ in ts:
+            t_.start()
+        for t_ in ts:
+            t_.join(60)
+        assert not errors and len(set(out)) == 1 and out[0] == q1["score"], (errors[:1], out)
+        for i in range(vc.INPUT_KEEP + 5):   # bounded: the oldest go
+            vc._phrase_f0(m.rmvpe, np.full(1600, i / 1000, np.float32))
+        assert len(vc._INPUT) == vc.INPUT_KEEP, len(vc._INPUT)
+    vc._INPUT.clear()
+    vc._RANGE.clear()
+    return f"a second check of the same phrases: RMVPE {again['f0']} calls (was {first['f0']}), HuBERT {again['hubert']} (was {first['hubert']}), prints {again['embed']} (was {first['embed']}); 6 threads agree"
+
+
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
     ("GET", "/static/icon-192.png"), ("GET", "/static/icon-512.png"), ("GET", "/files/output/x.mp3"), ("GET", "/pair"),
@@ -15547,7 +15647,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices, u_perf_static):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices, u_perf_static, u_perf_voicecheck):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

@@ -12,7 +12,10 @@ the Readers (the bundled Kokoro voices, 4 men and 4 women) read 8 fixed sentence
 2026-10-21 on three people and five voices: the Readers' phrases gave the same verdict as real interviewers' on all 15
 pairs, scores within 0.06 (own voices 0.80 / 0.65 / 0.67 / 0.69 good, every other one bad).
 """
+import hashlib
 import math
+import threading
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 
 import numpy as np
@@ -185,23 +188,88 @@ def test_phrases(proj, max_phrases: int = 8, max_seconds: float = 45.0):
     return picked, ref, "speech"
 
 
+# The input side of a check, kept (perf2): every check converts the same test phrases (a training's saves, a one-shot's
+# candidates), and what doesn't depend on the voice was worked out again each time: the person's pitch from up to 16
+# clips, and per phrase its pitch track, its speaker fingerprint and its HuBERT features. Kept by what they're made
+# from: the phrase's samples (a hash), a clip's file (path, inode, mtime, size), the models (the converter's own
+# objects, and its precision). Values are handed out as copies; at most INPUT_KEEP values (a one-shot's 8 phrases take
+# 24), on the CPU: the features as HuBERT gave them (fp16 on the GPU), under 1 MB a phrase.
+INPUT_KEEP = 32
+_INPUT: OrderedDict = OrderedDict()
+_RANGE: OrderedDict = OrderedDict()
+_INPUT_LOCK = threading.Lock()
+
+
+def _kept(memo: OrderedDict, key, make):
+    with _INPUT_LOCK:
+        if key in memo:
+            memo.move_to_end(key)
+            return memo[key]
+    value = make()   # (outside the lock: two threads may both make it, and get the same)
+    with _INPUT_LOCK:
+        memo[key] = value
+        while len(memo) > INPUT_KEEP:
+            memo.popitem(last=False)
+    return value
+
+
+def _digest(x: np.ndarray) -> bytes:
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    return hashlib.blake2b(x.tobytes(), digest_size=16).digest() + len(x).to_bytes(8, "little")
+
+
+def _phrase_f0(rmvpe, x: np.ndarray) -> np.ndarray:
+    f = _kept(_INPUT, ("f0", id(rmvpe), _digest(x)), lambda: rmvpe.infer_from_audio(x, thred=0.03))
+    return np.array(f)
+
+
+def _phrase_embed(embedder, x: np.ndarray) -> np.ndarray:
+    # (every SpeakerEmbedder loads the same model file: kept by that file, so a one-shot's checks share their prints)
+    key = ("emb", type(embedder).__name__, getattr(embedder, "model_key", None) or id(embedder), _digest(x))
+    return np.array(_kept(_INPUT, key, lambda: embedder.embed(x)))
+
+
+def _phrase_hubert(converter, x: np.ndarray):
+    import torch
+    dt = torch.float16 if converter.half else torch.float32
+
+    def make():
+        with torch.no_grad():
+            return converter.hubert.extract(torch.from_numpy(x).to(converter.device, dt)[None], "v2")[0].cpu()
+    a = _kept(_INPUT, ("hubert", id(converter.hubert), str(converter.device), dt, _digest(x)), make)
+    return a.to(converter.device).float()   # (fp16 -> fp32 is exact: the same numbers as before)
+
+
 def target_pitch(proj, rmvpe, n: int = 8) -> float | None:
     r = target_range(proj, rmvpe, n)
     return r[1] if r else None
 
 
 def target_range(proj, rmvpe, n: int = 16) -> list | None:
-    """[p5, median, p95] pitch (Hz) of the person's best kept phrases (their singing, for singers)."""
+    """[p5, median, p95] pitch (Hz) of the person's best kept phrases (their singing, for singers). Kept by the clips'
+    files (a clip re-cut or added changes the key) and the pitch model."""
+    import os
     import soundfile as sf
     from .project import _resample16
     kept = sorted([p for p in proj.training_phrases() if p.dur >= 2], key=lambda p: -p.score)[:n]
-    f0s = []
-    for p in kept:
-        x, sr = sf.read(str(proj.clip_path(p.id)), dtype="float32")
-        f = rmvpe.infer_from_audio(_resample16(x if x.ndim == 1 else x.mean(1), sr), thred=0.03)
-        f0s.append(f[f > 0])
-    f = np.concatenate(f0s) if f0s else np.zeros(0)
-    return [round(float(np.percentile(f, q)), 1) for q in (5, 50, 95)] if len(f) > 50 else None
+    paths = [proj.clip_path(p.id) for p in kept]
+    try:
+        stamps = tuple((str(f), st.st_ino, st.st_mtime_ns, st.st_size) for f in paths for st in (os.stat(f),))
+    except OSError:
+        stamps = None   # (a clip gone: read as before, and nothing kept)
+
+    def make():
+        f0s = []
+        for f in paths:
+            x, sr = sf.read(str(f), dtype="float32")
+            f = rmvpe.infer_from_audio(_resample16(x if x.ndim == 1 else x.mean(1), sr), thred=0.03)
+            f0s.append(f[f > 0])
+        f = np.concatenate(f0s) if f0s else np.zeros(0)
+        return [round(float(np.percentile(f, q)), 1) for q in (5, 50, 95)] if len(f) > 50 else None
+    if stamps is None:
+        return make()
+    r = _kept(_RANGE, (id(rmvpe), stamps), make)
+    return list(r) if r else None
 
 
 def check(voice: str, proj, converter, embedder, tests: tuple | None = None) -> Quality:
@@ -215,7 +283,7 @@ def check(voice: str, proj, converter, embedder, tests: tuple | None = None) -> 
     tgt_hz = target_pitch(proj, converter.rmvpe)
     sims, base, cents, content, secs = [], [], [], [], 0.0
     for x in phrases:
-        f0_in = converter.rmvpe.infer_from_audio(x, thred=0.03)
+        f0_in = _phrase_f0(converter.rmvpe, x)
         f = f0_in[f0_in > 0]
         shift = 12 * round(math.log2(tgt_hz / float(np.median(f)))) if tgt_hz and len(f) > 20 else 0
         shift = float(np.clip(shift, -24, 24))
@@ -225,7 +293,7 @@ def check(voice: str, proj, converter, embedder, tests: tuple | None = None) -> 
             continue
         o16 = _resample16(out, sr)
         sims.append(float(embedder.embed(o16) @ ref))
-        base.append(float(embedder.embed(x) @ ref))
+        base.append(float(_phrase_embed(embedder, x) @ ref))
         secs += len(x) / 16000
         # pitch: did it sing the intended melody? (frames voiced in both)
         f0_out = converter.rmvpe.infer_from_audio(o16, thred=0.03)
@@ -236,8 +304,8 @@ def check(voice: str, proj, converter, embedder, tests: tuple | None = None) -> 
             cents.append(float(np.median(np.abs(1200 * np.log2(f0_out[:n][both] / want)))))
         # content: are the words still there? (HuBERT features of input vs output, frame by frame)
         dt = torch.float16 if converter.half else torch.float32
+        a = _phrase_hubert(converter, x)
         with torch.no_grad():
-            a = converter.hubert.extract(torch.from_numpy(x).to(converter.device, dt)[None], "v2")[0].float()
             b = converter.hubert.extract(torch.from_numpy(o16).to(converter.device, dt)[None], "v2")[0].float()
         m = min(len(a), len(b))
         content.append(float(torch.nn.functional.cosine_similarity(a[:m], b[:m], dim=1).mean()))
