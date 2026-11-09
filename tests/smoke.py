@@ -598,13 +598,28 @@ def u_config_hand_edited():
         assert config.set_in_text(new, "paths", {"output_dir": '"F:/y"'}) == new, "a second write changed it again"
         assert "port" in config.section_text(new, "ui") and "port" not in config.section_text(new, "paths"), new
         assert tomllib.loads(config.set_in_text(t, "ui", {"port": "2"})) == {"paths": {"output_dir": "E:/x"}, "ui": {"port": 2}}
+    # an indented inner array isn't a header: the section goes on past it
+    nested = '[ui]\nranges = [\n  [1, 2],\n  [3, 4]\n]\n[paths]\noutput_dir = "E:/x"\n'
+    new = config.set_in_text(nested, "ui", {"port": "2"})
+    assert tomllib.loads(new) == {"ui": {"ranges": [[1, 2], [3, 4]], "port": 2}, "paths": {"output_dir": "E:/x"}}, new
+    # and a layout the reader can't follow is refused, never a value written into another section
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG_FILE
+        odd = '[ui]\nranges = [\n  [1]\n]\nport = 1\n'
+        CONFIG_FILE.write_text(odd, encoding="utf-8")
+        try:
+            config.set_values("ui", {"port": "2"})
+            raise AssertionError("a settings write went ahead on a layout it couldn't follow")
+        except ValueError as e:
+            assert "nothing was written" in str(e), e
+        assert CONFIG_FILE.read_text(encoding="utf-8") == odd
     with isolated_data() as box:
         from undercover.core.config import CONFIG, CONFIG_FILE
         saved_vault = dict(CONFIG.get("vault") or {})
         try:
             vault.set_folder(str(box / "vault-drive"))
             here = CONFIG_FILE.read_text(encoding="utf-8")
-            vault.run()
+            first = vault.run()["made"]
             # this install's file, hand-edited: its [paths] header carries a comment, and it is CRLF
             mine = here.replace("[paths]\n", "[paths]   # where my files live\n").replace("\n", "\r\n")
             assert mine != here.replace("\n", "\r\n")
@@ -622,6 +637,10 @@ def u_config_hand_edited():
             except ModelError as e:
                 assert "nothing was restored" in str(e), e
             assert CONFIG_FILE.read_text(encoding="utf-8") == odd, "a refused restore changed the settings"
+            # this install's file broken by hand outside its [paths]: the vault's copy is how it's recovered
+            CONFIG_FILE.write_text(here + "\n[ui\nbroken = \n", encoding="utf-8")
+            vault.restore(["settings/config.toml"], "replace", stamp=first)
+            assert tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))["paths"] == tomllib.loads(here)["paths"]
             CONFIG_FILE.write_text(here, encoding="utf-8")
         finally:
             CONFIG["vault"] = saved_vault
@@ -702,6 +721,13 @@ def u_vault_keep_both_copy():
             vault.restore([k for k in snap if k.startswith(f"voices/{long}/")], "both")
             copy = next(v for v in voices.list_voices() if v.name != long and v.name.startswith("a" * 40))
             assert voices.get_voice(copy.name).dir.name == copy.name and copy.name.endswith("-from-vault"), copy.name
+            from undercover.core.voices import ModelError
+            for bad in (b"not json", b"[1, 2]"):   # a record that can't name its copy stops the restore (made before any write)
+                try:
+                    vault._as_copy("voices/spy/meta.json", bad, vd / "spy-from-vault-3" / "meta.json", 3)
+                    raise AssertionError("an unreadable record came back as a copy")
+                except ModelError as e:
+                    assert "Nothing was restored" in str(e), e
             vault.restore(["training/spy/project.json"], "both")
             from undercover.doubleagent.project import Project
             p = Project.load("spy-from-vault")
@@ -720,7 +746,7 @@ def u_vault_replace_keeps_current():
     with isolated_data() as box:
         from undercover.core.config import CONFIG, path
         saved_vault = dict(CONFIG.get("vault") or {})
-        saved_put = vault.put
+        saved_put, saved_write = vault.put, vault._write_part
         try:
             clip = path("cache_dir") / "training" / "spy" / "clips" / "c1.wav"
             clip.parent.mkdir(parents=True)
@@ -759,8 +785,24 @@ def u_vault_replace_keeps_current():
             latest = vault.load_snapshot(root)["files"]
             assert latest[key][0] == now_sha, "the newest copy doesn't name the clip that was replaced"
             assert vault.get(root / "objects", now_sha) == b"RIFF the clip now"
+            # a run starting meanwhile (the quiet one, Vault now) doesn't prune away the old copy a restore is reading
+            assert old_stamp in vault.snapshots(root)
+            clip.unlink()
+            started = []
+
+            def run_first(dest, chunks):
+                if not started:
+                    started.append(1)
+                    vault.run()
+                return saved_write(dest, chunks)
+            vault._write_part = run_first
+            r = vault.restore([key], "skip", stamp=old_stamp)
+            vault._write_part = saved_write
+            assert started and r["restored"] == [key] and clip.read_bytes() == b"RIFF the vaulted clip", r
+            assert not vault._HELD, vault._HELD
         finally:
             vault.put = saved_put
+            vault._write_part = saved_write
             CONFIG["vault"] = saved_vault
     return "a locked file: nothing replaced; an Everything clip under What matters: vaulted first, named in the newest copy; the old copy held through the prune"
 
@@ -781,6 +823,21 @@ def u_vault_restore_forgets_voice():
             vault.set_folder(str(box / "vault-drive"))
             vault.run()
             (vd / "spy" / "model.pth").write_bytes(b"retrained")
+            # a cover reading with it: refused, its files untouched
+            from undercover.core import jobs as J
+            from undercover.core.voices import ModelError
+            busy = J.Job("cover", title="Hold On · Spy")
+            busy.voices = {"spy"}
+            J.JOBS[busy.id] = busy
+            try:
+                vault.restore(["voices/spy/model.pth"], "replace")
+                raise AssertionError("a voice's files were restored under a cover using it")
+            except ModelError as e:
+                assert "in use" in str(e) and "Nothing was restored" in str(e), e
+            finally:
+                busy.finish("done")
+                J.JOBS.pop(busy.id, None)
+            assert (vd / "spy" / "model.pth").read_bytes() == b"retrained"
             gpu.MODELS._conv = types.SimpleNamespace(voices={"spy": "loaded before", "other": "loaded"})
             r = vault.restore(["voices/spy/model.pth"], "replace")
             assert r["restored"] == ["voices/spy/model.pth"] and (vd / "spy" / "model.pth").read_bytes() == b"the vaulted model", r

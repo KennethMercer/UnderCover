@@ -78,7 +78,8 @@ def set_in_text(text: str, section: str, values: dict) -> str:
 
 # A table's header line as people write it by hand: indented or not, a comment after it, a CRLF file (2026-11-08: a
 # "[paths]  # where files live" line wasn't found, so every write added a second [paths] the app couldn't read).
-_ANY_HEADER = r"^[ \t]*\[\[?[^\[\]\r\n]+\]\]?[ \t]*(?:#[^\r\n]*)?\r?$"
+# (a header holds a key: bare, dotted or quoted; an inner array's line, "  [1, 2]" or "  ["a", "b"]", isn't one)
+_ANY_HEADER = r"""^[ \t]*\[\[?[ \t]*(?:[A-Za-z0-9_-]+|"[^"\r\n]*"|'[^'\r\n]*')(?:[ \t]*\.[ \t]*(?:[A-Za-z0-9_-]+|"[^"\r\n]*"|'[^'\r\n]*'))*[ \t]*\]\]?[ \t]*(?:#[^\r\n]*)?\r?$"""
 
 
 def _header(section: str) -> str:
@@ -112,7 +113,13 @@ def set_values(section: str, values: dict, config_file: Path | None = None):
         raise ValueError("the defaults file is never written: settings go in the user's config.toml")
     text = cf.read_text(encoding="utf-8") if cf.is_file() else HEADER
     new = set_in_text(text, section, values)
-    tomllib.loads(new)   # never write a file the app can't read back
+    try:
+        back = tomllib.loads(new)   # never write a file the app can't read back
+    except tomllib.TOMLDecodeError as e:
+        raise ValueError(f"couldn't set [{section}] in {cf.name} safely ({e}): nothing was written") from e
+    for k, v in values.items():   # ... nor one where a value landed anywhere but its own section (a hand-edited layout)
+        if (back.get(section) or {}).get(k, object()) != tomllib.loads(f"v = {v}")["v"]:
+            raise ValueError(f"couldn't set {section}.{k} in {cf.name} safely (its layout is unusual): nothing was written")
     fsutil.write_text(cf, new)
     if Path(cf).resolve() == Path(CONFIG_FILE).resolve():
         # only the keys written here: never re-read the section (a reload once put the real [paths] back into a test

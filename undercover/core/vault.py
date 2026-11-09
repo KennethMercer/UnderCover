@@ -47,6 +47,13 @@ SECRETS = {"phone.json"}   # device tokens: never in the vault (after a restore,
 CHUNK = 1 << 20
 FLAC_MAX = 64 << 20     # bigger WAVs (raw sources in "Everything") stream through lzma instead of FLAC in memory
 _RUN_LOCK = threading.Lock()   # one run at a time: a run's prune must never see another run's fresh, unnamed objects
+_HELD: dict = {}   # {(vault root, stamp): restores reading it}: no prune lets those go while a restore reads them
+_HELD_LOCK = threading.Lock()
+
+
+def _held(root: Path) -> set:
+    with _HELD_LOCK:
+        return {s for (r, s), n in _HELD.items() if n and r == str(root)}
 
 
 # ---------------------------------------------------------------- what goes in
@@ -474,9 +481,12 @@ def _run(root: Path, size: str, progress, cancel, must=(), hold=()) -> dict:
     for kind, key, f in must:   # each one in, read fresh, or no snapshot at all (what a Replace is about to write over)
         try:
             stt = f.stat()
+            if key in snap and snap[key][1:3] == [stt.st_size, stt.st_mtime_ns]:
+                continue   # in already, this run, as it is now
             sha = sha256_file(f)
-            put(objects, f, sha)
-            if sha256_file(f) != sha or f.stat().st_mtime_ns != stt.st_mtime_ns:
+            put(objects, f, sha)   # (put re-hashes what it reads against sha)
+            after = f.stat()
+            if (after.st_size, after.st_mtime_ns) != (stt.st_size, stt.st_mtime_ns):
                 raise OSError("it changed while it was being copied")
         except OSError as e:
             raise ModelError(f"Couldn't put the one here into the vault first ({f.name}: {e.strerror or e}); "
@@ -544,7 +554,7 @@ def prune(root: Path, now: datetime | None = None, hold=()) -> int:
     """Remove snapshots the policy lets go, then the objects no kept snapshot names (inside the vault only). hold: stamps
     kept this time whatever the policy says. -> objects removed"""
     stamps = snapshots(root)
-    keep = sorted(set(keep_which(stamps, now)) | (set(hold) & set(stamps)))
+    keep = sorted(set(keep_which(stamps, now)) | ((set(hold) | _held(root)) & set(stamps)))
     drop = [root / "snapshots" / f"{s}.json" for s in stamps if s not in keep]
     if drop:
         storage.remove_files(drop, within=[root / "snapshots"])
@@ -662,21 +672,23 @@ def _record_of(key: str) -> bool:
     return len(parts) == 3 and (parts[0], parts[2]) in (("voices", "meta.json"), ("training", "project.json"))
 
 
-def _as_copy(key: str, dest: Path, n: int):
-    """Keep both: a restored voice's or project's record names the copy, not the one it sits beside (2026-11-08: the
-    copy's meta still said "<name>", so two voices had one name and the copy never loaded; a project's copy would have
-    saved over the original's project.json). A record that isn't readable JSON is left as it came back."""
+def _as_copy(key: str, data: bytes, dest: Path, n: int) -> bytes:
+    """Keep both: a voice's or project's record as its copy's (written at dest), naming the copy, not the one it sits
+    beside (2026-11-08: the copy's meta still said "<name>", so two voices had one name and the copy never loaded; a
+    project's copy would have saved over the original's project.json). Made before anything is written: a record that
+    isn't a JSON object stops the restore."""
     try:
-        rec = json.loads(dest.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
+        rec = json.loads(data.decode("utf-8"))
+    except ValueError:
+        rec = None
     if not isinstance(rec, dict):
-        return
+        raise ModelError(f"The vault's record for {key.split('/')[1]} can't be read, so it can't come back beside the one "
+                         "here. Nothing was restored.")
     d = dest.parent
     if key.startswith("voices/"):
         from .voices import display_of_meta
         shown = display_of_meta(rec)   # (the original's name, before it's the copy's)
-        rec.update(name=d.name,dir=str(d), pth=str(d / Path(rec.get("pth") or "model.pth").name),
+        rec.update(name=d.name, dir=str(d), pth=str(d / Path(rec.get("pth") or "model.pth").name),
                    index=str(d / Path(rec["index"]).name) if rec.get("index") else None,
                    display=f"{shown} from vault" + (f" {n}" if n > 1 else ""))
         extra = rec.get("extra") if isinstance(rec.get("extra"), dict) else {}
@@ -684,7 +696,7 @@ def _as_copy(key: str, dest: Path, n: int):
             extra.pop(k, None)
     else:
         rec["name"] = d.name
-    fsutil.write_text(dest, json.dumps(rec, indent=2 if key.startswith("voices/") else 1))
+    return json.dumps(rec, indent=2 if key.startswith("voices/") else 1).encode("utf-8")
 
 
 def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None, stamp: str | None = None) -> dict:
@@ -697,6 +709,21 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
     s = settings()
     folder = folder or s["folder"]
     root = root_of(folder)
+    names = snapshots(root)
+    stamp = stamp or (names[-1] if names else None)   # (the one read from, by name: a run meanwhile adds a newer one)
+    hold = (str(root), stamp)
+    with _HELD_LOCK:   # no run's pruning lets it go while this reads from it (a quiet run or Vault now may start)
+        _HELD[hold] = _HELD.get(hold, 0) + 1
+    try:
+        return _restore(keys, on_conflict, folder, root, stamp)
+    finally:
+        with _HELD_LOCK:
+            _HELD[hold] -= 1
+            if not _HELD[hold]:
+                _HELD.pop(hold)
+
+
+def _restore(keys: list[str], on_conflict: str, folder: str, root: Path, stamp: str | None) -> dict:
     snap = load_snapshot(root, stamp)
     files = snap["files"]
     plan, conflicts, same = [], [], []
@@ -746,23 +773,36 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
             raise ModelError(f"A restore may only write into UnderCover's library ({t} isn't); nothing was restored.")
         if storage.ALLOWED_ROOTS is not None and storage.refuse([t]):
             raise ModelError(storage.refuse([t]))
+    from . import jobs
+    vd = path("voices_dir")
+    voice_of = lambda t: Path(os.path.relpath(os.path.abspath(t), os.path.abspath(vd))).parts[0] \
+        if storage._inside(t, vd) and not storage._same(t, vd) else None
+    for name in sorted({voice_of(t) for _, _, t in plan if voice_of(t) and (vd / voice_of(t)).exists()}):
+        if jobs.jobs_using(name):   # never a model's files changed under a cover or speech reading with it
+            raise ModelError(f"The voice {name} is in use by a cover or speech right now: restore it when that's done. "
+                             "Nothing was restored.")
     if on_conflict == "replace" and any(t.exists() for _, _, t in plan):
         # what's there now goes into the vault first, so replacing loses nothing: every file about to be written over,
         # each one in or nothing replaced (a run alone vaults only what the vault's size takes, and skips a locked file);
         # the snapshot read from is held through that run's pruning
         run(folder, must=[((files[key][3:4] or ["file"])[0], key, t) for key, _, t in plan if t.is_file()],
-            hold=[stamp or snapshots(root)[-1]])
+            hold=[stamp])
     for key, sha, t in plan:   # every piece there before anything is written (never a restore that stops half-way)
         if find_object(root / "objects", sha) is None:
             raise ModelError(f"The vault is missing a piece ({sha[:12]}…); nothing was restored.")
     # the settings are made up before anything is written: one that can't keep this install's [paths] stops it all
     settings_data = {key: _config_keeping_paths(get(root / "objects", sha)) for key, sha, t in plan
                      if storage._same(t, config.CONFIG_FILE)}
+    # so is a Keep both copy's record (re-hashed whole: it's a small JSON), already naming the copy
+    copy_records = {key: _as_copy(key, get(root / "objects", sha), t, copy_n[key]) for key, sha, t in plan
+                    if key in both and _record_of(key)}
     plan.sort(key=lambda p: _record_of(p[0]))   # a voice's or project's record last: cut short, a half-restored one isn't listed
     done = []
     for key, sha, t in plan:
         if key in settings_data:
             _write_part(t, [settings_data[key]])
+        elif key in copy_records:
+            _write_part(t, [copy_records[key]])
         else:
             obj = find_object(root / "objects", sha)
             if obj is None:
@@ -779,14 +819,11 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
                 part.unlink(missing_ok=True)
                 raise ModelError(f"A piece of the vault is damaged ({obj.name}); that file wasn't restored.")
             os.replace(part, t)
-            if key in both and _record_of(key):
-                _as_copy(key, t, copy_n[key])
-        vd = path("voices_dir")
-        if storage._inside(t, vd) and not storage._same(t, vd):
+        if voice_of(t):
             # a voice's files changed under the converter: its cached copy goes after every file written (a cover that
             # loaded it in between reloads it), so covers use what was restored, never the model from before
             from . import gpu
-            gpu.forget_voice(Path(os.path.relpath(os.path.abspath(t), os.path.abspath(vd))).parts[0])
+            gpu.forget_voice(voice_of(t))
         done.append(key)
     return {"restored": done, "same": same, "skipped": conflicts if on_conflict == "skip" else [], "conflicts": []}
 
@@ -817,9 +854,17 @@ def _config_keeping_paths(data: bytes) -> bytes:
     new = config.replace_section(old, "paths", config.section_text(cur, "paths"))
     import tomllib
     try:
-        got, here = tomllib.loads(new), tomllib.loads(cur) if cur else {}   # never write a config the app can't read back
+        got = tomllib.loads(new)   # never write a config the app can't read back
     except tomllib.TOMLDecodeError as e:
         raise ModelError(f"The vault's settings file can't be read back here ({e}); nothing was restored.")
+    try:   # this install's own file may be the broken one being recovered: then its [paths] alone must read
+        here = tomllib.loads(cur) if cur else {}
+    except tomllib.TOMLDecodeError:
+        try:
+            here = tomllib.loads(config.section_text(cur, "paths") or "")
+        except tomllib.TOMLDecodeError as e:
+            raise ModelError(f"This install's settings file can't be read where it says where your folders are ({e}); "
+                             "fix its [paths] by hand first. Nothing was restored.")
     if got.get("paths") != here.get("paths"):   # never a config that points this install's folders somewhere else
         raise ModelError("The vault's settings couldn't keep where this install's folders are; nothing was restored.")
     return new.encode("utf-8")
