@@ -277,6 +277,7 @@ class Handler(BaseHTTPRequestHandler):
         self._slow, self._shut = t, False
         try:
             super().handle_one_request()
+            self._left_unread()   # (a body left unread ends the connection: below)
         except OSError:
             if not self._shut:   # (not the deadline's own doing)
                 raise
@@ -301,10 +302,6 @@ class Handler(BaseHTTPRequestHandler):
         ok = super().parse_request()
         self.rfile.n = 0   # (the body starts here)
         return ok
-
-    def handle_one_request(self):
-        super().handle_one_request()
-        self._left_unread()
 
     def _left_unread(self):
         """(hardening) A request answered without its whole body read (a refusal before the upload): the rest would be
