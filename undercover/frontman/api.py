@@ -108,6 +108,11 @@ def _upload(h):
         return h._error("The file was empty.")
     if n > UCFG["max_upload_mb"] * 1e6:
         return h._error(f"That file is over {UCFG['max_upload_mb']} MB.")
+    from ..core import storage
+    why = storage.start_writing()   # (refused while a Storage move runs; a move waits for it)
+    if why:
+        h.close_connection = True   # (the body isn't read)
+        return h._error(why, 409)
     up = path("uploads_dir")
     tmp = up / f"upload_{uuid.uuid4().hex}.part"
     sha = hashlib.sha256()
@@ -130,6 +135,7 @@ def _upload(h):
         h._json(meta)
     finally:
         tmp.unlink(missing_ok=True)   # moved into place by register_song when it worked
+        storage.done_writing()
 
 
 def _checked_options(h, body: dict, duration: float | None = None):
@@ -405,7 +411,14 @@ def _song_from_youtube(h, body: dict):
                 raise ValueError("That isn't a YouTube video. Search again.")
             r = songs.SongResult(id=vid, url=f"https://www.youtube.com/watch?v={vid}",
                                  **{k: body[k] for k in ("title", "raw_title", "channel", "duration")})
-        h._json(songs.download(r, register_song))
+        from ..core import storage
+        why = storage.start_writing()   # (refused while a Storage move runs; a move waits for it)
+        if why:
+            return h._error(why, 409)
+        try:
+            h._json(songs.download(r, register_song))
+        finally:
+            storage.done_writing()
     except (ModelError, ValueError, KeyError, TypeError) as e:
         h._error(str(e) if not isinstance(e, (KeyError, TypeError)) else "That song result is incomplete. Search again.")
 
