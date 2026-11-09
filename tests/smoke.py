@@ -11107,6 +11107,11 @@ def u_duet_shape_words():
     on = E.new_doc("0123456789", ws3, rows, plan, plan, dur, {"A": 0, "B": 0}, E.snap_points(lead2, back, ws3), gate, True, True)
     e = E.check_edit({"op": "singer", "part": "lead", "who": "B", "words": [1, 5], "words_hash": on["words_hash"]}, on)
     assert e["moved"].startswith('It starts just after "Baby" and ends just after "you" (0:13–0:18)'), e
+    ws4 = [list(w) for w in ws2]
+    ws4[1][0] = " you,"   # a start that moved in past a word the pick has again: with its neighbour too
+    on = E.new_doc("0123456789", ws4, rows, plan, plan, dur, {"A": 0, "B": 0}, E.snap_points(lead2, back, ws4), gate, True, True)
+    e = E.check_edit({"op": "singer", "part": "lead", "who": "B", "words": [1, 5], "words_hash": on["words_hash"]}, on)
+    assert e["moved"].startswith('It starts just after "oh you" and ends just after "like you" (0:13–0:18)'), e
     return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out; a word the pick also has"
 
 

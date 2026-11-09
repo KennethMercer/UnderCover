@@ -351,12 +351,13 @@ def _landed(doc: dict, t0: float, t1: float, a: tuple, b: tuple) -> str:
         return ""
     ws = doc["words"]
     mid = lambda i: (ws[i][1] + ws[i][2]) / 2
-    picked = {_quoted(ws[i][0]).casefold() for i in range(len(ws)) if t0 <= mid(i) <= t1}
+    text = lambda i: _quoted(ws[i][0]).casefold()
+    picked = [i for i in range(len(ws)) if t0 <= mid(i) <= t1]
 
     def say(i, nb):
-        """A word an edge is next to; one from outside the pick whose text the pick also has goes with its neighbour (nb: -1 the
-        word before it, +1 the one after), so "ends just after "you"" never reads as the pick's own "you" (Internal Affairs H2)."""
-        if t0 <= mid(i) <= t1 or _quoted(ws[i][0]).casefold() not in picked or not 0 <= i + nb < len(ws):
+        """A word an edge is next to; one whose text the pick also has elsewhere goes with its neighbour (nb: -1 the word before
+        it, +1 the one after), so "ends just after "you"" never reads as another "you" in the pick (Internal Affairs H2)."""
+        if not any(j != i and text(j) == text(i) for j in picked) or not 0 <= i + nb < len(ws):
             return _quoted(ws[i][0])
         return " ".join(_quoted(ws[j][0]) for j in sorted((i, i + nb)))
     inside = [i for i in range(len(ws)) if a[0] <= mid(i) <= b[0]]
