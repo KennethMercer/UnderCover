@@ -8856,7 +8856,7 @@ def u_edits():
     e = E.check_edit({**sing, "t0": 0.01, "t1": 59.99}, doc)
     assert (e["t0"], e["t1"]) == (0.0, 60.0), e   # the ends of the song are ends
     e = E.check_edit({**sing, "t0": 44.0, "t1": 59.99}, doc)
-    assert (e["t0"], e["t1"]) == (45.0, 60.0) and e["moved"] == 'It starts just after "w85" and ends at the end of the song (0:45–1:00); the start may be heard.', e   # a dip only with no silence near, and it says so
+    assert (e["t0"], e["t1"]) == (45.0, 60.0) and e["moved"] == 'It starts just after "w85" and ends at the end of the song (0:45–1:00); the join at its start may be heard.', e   # a dip only with no silence near, and it says so
     # what's refused, and the list unchanged
     for bad in ([], "x", None, 3, {**sing}, {**sing, "t0": 1}, {**sing, "t0": 1, "t1": 9, "section": 0},
                 {**sing, "t0": 1, "t1": 9, "path": "../x"}, {**sing, "t0": float("nan"), "t1": 9}, {**sing, "t0": 1, "t1": float("inf")},
@@ -10180,10 +10180,10 @@ want("rows, alone", voiceRows({voice: bw, duet: {...duet, voice: null, alone: "x
 want("rows, one", voiceRows({voice: bw}), '<span class="k">Voice</span><span>LINE</span>', "taking turns");
 const set = {octave: 0, key: -5, why: "key -5, Barry White at octave +0, Michael Jackson at octave +1"};
 want("done", doneLine({song: {title: "Hold On"}, voice: bw, duet, settings: set}, 61),
-     "Done in 61 s: <b>Hold On</b> with <b>Barry White</b> &amp; <b>Michael Jackson</b>, taking turns · song 5 semitones lower<span data-deep>", "octave ·");
+     "Done in 61 s: <b>Hold On</b> with <b>Barry White</b> &amp; <b>Michael Jackson</b>, taking turns · the song 5 semitones lower<span data-deep>", "octave ·");
 want("done, own key", doneLine({song: {title: "Hold On"}, voice: bw, duet, settings: {...set, key: 0}}, 61), "taking turns · the song&#39;s own key");
 want("done, one", doneLine({song: {title: "Hold On"}, voice: bw, settings: {octave: 0, key: -6, why: "w"}}, 61),
-     "with <b>Barry White</b> · the singer&#39;s octave · song 6 semitones lower", "taking turns");
+     "with <b>Barry White</b> · the singer&#39;s octave · the song 6 semitones lower", "taking turns");
 want("done, no voice yet", doneLine({song: {title: "x"}, person: "Barry White", settings: {octave: 0, key: 0, why: "w"}}, 1), "with <b>Barry White</b> ·");
 want("done, same voice", doneLine({song: {title: "x"}, voice: {...bw, name: "michael-jackson-uc"}, duet, settings: set}, 1), "with <b>Barry White</b> · the singer&#39;s octave", "taking turns");""")
     assert not out, "; ".join(out or [])
@@ -10223,20 +10223,20 @@ def u_duet_shape_words():
     doc = E.new_doc("0123456789", ws, rows, plan, plan, dur, {"A": 0, "B": 0}, E.snap_points(lead, back, ws), gate, True, True)
     pick = lambda part, w, d=doc: E.check_edit({"op": "singer", "part": part, "who": "B", "words": w, "words_hash": doc["words_hash"]}, d)
     e = pick("lead", [1, 4])
-    assert e["moved"] == 'It starts just after "Baby," and ends just after "calling?" (0:13–0:18).', e
+    assert e["moved"] == 'It starts just after "Baby" and ends just after "calling" (0:13–0:18).', e   # (the quote marks the word; its punctuation goes)
     try:
         pick("backing", [1, 4])
         raise AssertionError("the backing found a place")
     except ModelError as x:
-        assert str(x) == "There's no place to change near the start, at \"Baby,\".", x   # (not "oh", which ends where "Baby," starts)
+        assert str(x) == "There's no place to change near the start, at \"Baby\".", x   # (not "oh", which ends where "Baby," starts; no comma)
     # a dip at a join: said once, as the join that may be heard
     dipped = {**doc, "points": {**doc["points"], "lead": [p for p in doc["points"]["lead"] if p[0] > 14.0], "dips": [13.5]}}
     e = pick("lead", [1, 4], dipped)
-    assert e["moved"] == 'It starts just after "Baby," and ends just after "calling?" (0:13–0:18); the start may be heard.', e
+    assert e["moved"] == 'It starts just after "Baby" and ends just after "calling" (0:13–0:18); the join at its start may be heard.', e
     # both edges moved out: each names its own word
     wide = {**doc, "points": {"lead": [[9.0, 9.9], [13.4, 13.6]], "backing": [], "dips": []}}
     e = E.check_edit({"op": "singer", "part": "lead", "who": "B", "t0": 10.4, "t1": 12.0}, wide)
-    assert e["moved"] == 'It starts just before "oh" and ends just after "Baby," (0:09–0:13).', e
+    assert e["moved"] == 'It starts just before "oh" and ends just after "Baby" (0:09–0:13).', e
     # edges where they were asked: nothing to say (the page says where it starts and ends itself)
     assert pick("lead", [5, 5])["moved"] == ""
     return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out"
@@ -10247,7 +10247,7 @@ def u_duet_copy():
     import inspect
     from undercover.frontman import pipeline as PL
     src = inspect.getsource(PL.CoverEngine.make_cover)
-    assert PL.DUET_BACKING_SAID == "Converting the backing vocals (both singers)"
+    assert PL.DUET_BACKING_SAID == "Converting the backing vocals in both voices"
     assert src.count("DUET_BACKING_SAID") == 2 and "backing vocals to {label_of(dvoice.name)} too" not in src, "a duet's backing named one singer"
     # one way to share it is said as a sentence, not a lone pill (D6); "I'll choose" isn't shown, even in Deep Cover, until it's built
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
@@ -10846,7 +10846,7 @@ def u_leadgate():
     assert said and not any("original singers" in s for s in said) and any("in the backing's voice" in s for s in said), said
     # a duet's two singers sharing the backing (Internal Affairs D4): no one "backing's voice", so the line says who sings it
     said = G.note(g, "keep", backing_converted=True, shared=True)
-    assert any(s.endswith("they're sung with the rest of the backing, by whichever singer has the backing there.") for s in said), said
+    assert any(s.endswith("they're sung with the rest of the backing, by whichever singer has it there.") for s in said), said
     assert not any("the backing's voice" in s for s in said), said
     assert any("by whichever singer" in s for s in G.note(g, "top", backing_converted=True, missing=g["chorus"], shared=True)) or not g["chorus"]
     import inspect
@@ -13125,13 +13125,13 @@ def u_shape_page():
     window.api = async (u, o) => {
       if (/edits\/price$/.test(u)) {
         if (o.json.part === "backing") throw new Error("There's no place to change near the start, at \"Hold\".");
-        return { edit: { moved: "It starts just after \"Hold\" and ends just after \"night\" (0:01–0:02); the start may be heard.", t0: 1.35, t1: 2.1, words: [1, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
+        return { edit: { moved: "It starts just after \"Hold\" and ends just after \"night\" (0:01–0:02); the join at its start may be heard.", t0: 1.35, t1: 2.1, words: [1, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
       }
       throw new Error("stub");
     };
     SH.pick = [0, 2]; await shProbe();
     const bar = $("#shape .sh-bar").innerText;
-    ok("the bar says the gate's sentence", bar.includes("It starts just after \"Hold\" and ends just after \"night\" (0:01–0:02); the start may be heard.") && bar.includes("poor fit") && bar.includes("no place to change near the start"));
+    ok("the bar says the gate's sentence", bar.includes("It starts just after \"Hold\" and ends just after \"night\" (0:01–0:02); the join at its start may be heard.") && bar.includes("poor fit") && bar.includes("no place to change near the start"));
     ok("a pick from a line's first word isn't told to start there (D2)", !bar.includes("Take the stretch from the start of the line"));
     SH.pick = [1, 2]; await shProbe();
     ok("a pick inside a line is", $("#shape .sh-bar").innerText.includes("at \"Hold\". Take the stretch from the start of the line."));
