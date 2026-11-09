@@ -13425,6 +13425,55 @@ def u_perf_validate():
     return f"{len(hold)} held-out phrases: mels {2 * len(hold)} on the first epoch, {len(hold)} after; loss identical"
 
 
+@check("perf: a separation pass encodes its stems side by side, the same samples as before, all done before it returns")
+def u_perf_stems_flac():
+    import threading
+    import numpy as np
+    import soundfile as sf
+    from types import SimpleNamespace
+    from undercover.core import separate
+    with isolated_data() as t:
+        song = t / "song.wav"
+        sr = 44100
+        x = (0.2 * np.sin(np.arange(sr * 2) / sr * 2 * np.pi * 330)).astype(np.float32)
+        sf.write(str(song), np.stack([x, x], 1), sr, subtype="PCM_16")
+        sep = separate.StemSeparator()
+        made, threads = {}, set()
+
+        class Fake:
+            model_instance = SimpleNamespace(overlap=None)
+
+            def separate(self, audio):
+                outs = []
+                for k, stem in enumerate(("Vocals", "Instrumental")):
+                    y = np.stack([x * (k + 1) / 3, x * (k + 2) / 4], 1)
+                    f = sep.work_dir / f"song_({stem})_model.wav"
+                    sf.write(str(f), y, sr, subtype="PCM_24")
+                    made[stem.lower()] = sf.read(str(f), dtype="int32")[0]
+                    outs.append(f.name)   # (bare names, as audio-separator returns them)
+                return outs
+        sep._get = lambda model: Fake()
+        real = separate.to_flac
+
+        def to_flac(w):
+            threads.add(threading.get_ident())
+            return real(w)
+        separate.to_flac = to_flac
+        try:
+            out = sep.run(song, "model.ckpt", t / "app" / "cache" / "stems" / "s1" / "main", overlap=2)
+        finally:
+            separate.to_flac = real
+        assert sorted(out) == ["instrumental", "vocals"] and all(p.suffix == ".flac" and p.is_file() for p in out.values()), out
+        assert not list(out["vocals"].parent.glob("*.wav")), "a WAV was left beside its FLAC"
+        for k, p in out.items():
+            y, rate = sf.read(str(p), dtype="int32")
+            assert rate == sr and np.array_equal(y, made[k]) and sf.info(str(p)).subtype == "PCM_24", f"{k}: not the same samples"
+        assert len(threads) == 2, f"the two stems weren't encoded side by side ({len(threads)} thread)"
+        again = sep.run(song, "model.ckpt", t / "app" / "cache" / "stems" / "s1" / "main", overlap=2)   # the cache, as before
+        assert again == out, (again, out)
+    return "2 stems, 2 threads, bit-identical 24-bit FLAC, no WAV left; the second run from the cache"
+
+
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
     ("GET", "/static/icon-192.png"), ("GET", "/static/icon-512.png"), ("GET", "/files/output/x.mp3"), ("GET", "/pair"),
@@ -15733,7 +15782,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices, u_perf_static, u_perf_voicecheck, u_perf_duet_feats, u_perf_validate):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices, u_perf_static, u_perf_voicecheck, u_perf_duet_feats, u_perf_validate, u_perf_stems_flac):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

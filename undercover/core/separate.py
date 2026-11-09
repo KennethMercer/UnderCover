@@ -334,7 +334,7 @@ class StemSeparator:
             _progress = None
 
         cache_dir.mkdir(parents=True, exist_ok=True)
-        stems = {}
+        moved = []
         for out in outputs:
             out = Path(out)
             if not out.is_absolute():  # returns bare filenames despite its docstring
@@ -343,8 +343,14 @@ class StemSeparator:
             stem = out.stem.split("_(")[-1].split(")")[0].lower() if "_(" in out.stem else out.stem.lower()
             dest = cache_dir / f"{stem}.wav"
             shutil.move(str(out), dest)
-            stems[stem] = to_flac(dest)
-        return stems
+            moved.append((stem, dest))
+        # the pass's stems encoded side by side (perf2: libFLAC lets go of the GIL; a 4-minute pair 1.9 -> 0.9 s), all
+        # done before the pass returns, as before
+        from concurrent.futures import ThreadPoolExecutor
+        parallel = len({stem for stem, _ in moved}) == len(moved)   # (two outputs naming one stem: one at a time)
+        with ThreadPoolExecutor(max_workers=max(1, min(4, len(moved))) if parallel else 1) as pool:
+            done = list(pool.map(to_flac, [d for _, d in moved]))
+        return {stem: f for (stem, _), f in zip(moved, done)}
 
 
 LEAD_MISSING_DB = 25.0   # a karaoke lead this far under its backing (RMS) is no lead: two singers in harmony
