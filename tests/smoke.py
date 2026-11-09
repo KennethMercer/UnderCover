@@ -12448,6 +12448,11 @@ def u_token_ratios():
     wa = (web / "winamp.css").read_text(encoding="utf-8")
     ix = (web / "index.html").read_text(encoding="utf-8")
     assert all(f'<small class="mono" data-deep>{n}</small>' in ix for n in ("Roformer", "RVC · RMVPE", "ffmpeg")), "engine names are Deep Cover's"
+    # polish batch 4: the second singer's x is 44 on a phone, Shape it's Done in the title row there, a changed stretch's underline square-ended
+    css = (web / "app.css").read_text(encoding="utf-8")
+    assert "@media (max-width: 480px) { .fm-duet .vchip .x::after { inset: -10px; } }" in css and ".shape .sh-w:is(.ea, .eb, .eo) { border-radius: 0; }" in css
+    assert css.index(".fm-duet .vchip .x::after { content") < css.index("@media (max-width: 480px) { .fm-duet .vchip .x::after")   # (the phone's wins)
+    assert 'class="linkbtn quiet sh-done" type="button" data-sh="done"' in (web / "shape.js").read_text(encoding="utf-8")
     assert "/* -- bones pins -- */" in wa and ':where(html[data-skin="winamp"]) .linkbtn { padding: 0; margin: 0;' in wa
     assert wa.index("/* -- end bones pins -- */") < wa.index('html[data-skin="winamp"] .mod'), "the pins come before the skin's own rules"
     return f"{len(themes)} themes x 2 modes x 4 modules; worst " + ", ".join(f"{k} {v:.2f}" for k, v in worst.items())

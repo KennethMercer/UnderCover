@@ -129,7 +129,7 @@ canvas.seekable { cursor: pointer; height: 64px; }
   /* where link-buttons stack (a column, a side, a pair of head links) or end a box, the padding isn't taken back: the group grows a little
      and no two targets share a pixel (the designer's review of bones1) */
   :is(.rn-more, .addon .side, .row-gap, .se-tags-hint) > .linkbtn { margin-block: 0; }
-  .play.vline::after, .tplay::after, .fm-duet .vchip .x::after { content: ""; position: absolute; inset: -7px; border-radius: inherit; }
+  .play.vline::after, .tplay::after { content: ""; position: absolute; inset: -7px; border-radius: inherit; }
   .btn, .icon-btn, .mini, .cat, .tab, .seg button, .thumb, .ab button, .install, .fchip, .stoggle, .chip-btn, .top .lp-btn, .top .deep-btn, .top .lp-more,
   input[type=text], input[type=search], input[type=time], input:not([type]), select { min-height: 44px; }
   .song-wave .play, .pcard .play, .lplayer .play, .se-rrow .play, .os-oct-ab .pcard .play { width: 44px; height: 44px; }
@@ -287,6 +287,8 @@ details.adv[open] summary { border-bottom: 1px solid var(--line); }
 .fm-duet .vchip small { color: var(--muted); font-weight: 500; font-size: 12px; }
 .fm-duet .vchip .x { flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); display: grid; place-items: center; font-size: 15px; line-height: 1; }
 .fm-duet .vchip .x:hover { color: var(--fg); background: var(--panel-2); }
+.fm-duet .vchip .x::after { content: ""; position: absolute; inset: -4px; border-radius: inherit; }   /* 32 px to press, 24 to see */
+@media (max-width: 480px) { .fm-duet .vchip .x::after { inset: -10px; } }   /* 44: on a phone it's the only way back to one singer ("Just one singer" is hidden) */
 .fm-duet .addvoice { display: inline-flex; align-items: center; border: 0; border-radius: 99px; padding: 4px 12px; background: none; color: var(--accent); font-weight: 600; font-size: 14px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent); }
 .fm-duet .addvoice:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .fm-duet .picker { background: var(--panel); border-radius: 9px; padding: 8px; }
@@ -343,9 +345,11 @@ details.adv[open] summary { border-bottom: 1px solid var(--line); }
 .shape .sh-w:hover { background: var(--panel-3); }
 .shape .sh-w:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .shape .sh-w.in { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+/* a changed stretch is one line (batch 4): square ends; the words sit padding to padding in their flex line, so the marks join */
 .shape .sh-w.ea { box-shadow: inset 0 -2px 0 var(--va); }
 .shape .sh-w.eb { box-shadow: inset 0 -2px 0 var(--vb); }
 .shape .sh-w.eo { box-shadow: inset 0 -2px 0 var(--muted); }
+.shape .sh-w:is(.ea, .eb, .eo) { border-radius: 0; }
 body:not(.deep) .shape .sh-w:is(.ea, .eb, .eo) { box-shadow: inset 0 -2px 0 var(--accent); }   /* basic: a changed stretch, one colour; the singers' own are Deep Cover's */
 body.deep .shape .sh-w.sa { color: color-mix(in srgb, var(--va) 80%, var(--fg)); }
 body.deep .shape .sh-w.sb { color: color-mix(in srgb, var(--vb) 80%, var(--fg)); }
@@ -386,8 +390,13 @@ body.deep .shape .land { display: inline-block; }
 .shape .state { display: grid; gap: 8px; padding: 16px 12px; text-align: center; color: var(--muted); }
 .shape .state b { color: var(--fg); font-weight: 600; }
 .hrow .fact.shaped { color: var(--accent); }
+.shape .sh-head > .sh-done { align-self: center; }
 @container (max-width: 440px) {
   .shape .sh-acts { width: 100%; }
+  /* Done goes up to the title row (it wrapped alone onto a third line), the three buttons keep theirs */
+  .shape .sh-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .shape .sh-head > .sh-done { grid-column: 2; grid-row: 1; align-self: start; }
+  .shape .sh-head > .sh-acts { grid-column: 1 / -1; }
   .shape .sh-bar { position: sticky; bottom: 0; z-index: 2; }
   .shape .sh-choice .lab { min-width: 0; width: 100%; }
   .shape .sh-row { grid-template-columns: minmax(0, 1fr) auto; }
