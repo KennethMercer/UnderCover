@@ -37,6 +37,14 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(1, str(ROOT / "scripts"))   # make_demo_voice (the demo voice's builder) lives there
 
 RESULTS: list = []
+os.environ["UNDERCOVER_TEST_LINK"] = "1"   # the phone's checks run with its link offered (a sandbox server reads this in test mode)
+
+
+def _link_on():
+    """The phone link is hidden in the tree until a release offers it (core/tailnet.OFFERED): every check here runs
+    with it offered, as the phone's own checks need; u_link_offered reads the tree's own value from the source."""
+    from undercover.core import tailnet
+    tailnet.OFFERED = True
 try:   # a check's note with a non-Windows character (≥) must not fail the check when output goes to a file or pipe
     sys.stdout.reconfigure(errors="replace")
 except (AttributeError, ValueError):
@@ -48,6 +56,7 @@ def check(name):
         def run(*a, **kw):
             t0 = time.time()
             try:
+                _link_on()
                 note = fn(*a, **kw)
                 RESULTS.append((True, name))
                 print(f"  PASS  {name}" + (f"  ({note})" if note else "") + f"  [{time.time() - t0:.1f}s]", flush=True)
@@ -15961,14 +15970,17 @@ def _users_server_training(since: float | None = None) -> set:
             and (j.get("state") in ("queued", "running", "pausing") or during(j))}
 
 
-@check("a release can ship without the phone link's setup (tailnet.OFFERED, on by default): off, the card has no Set up, the tray no Phone link, Set up is refused plainly and the link never starts; a copy that had it on keeps its phones on the home Wi-Fi")
+@check("1.2 ships without the phone link's setup (tailnet.OFFERED False in the tree; the suite turns it on for the phone's checks): the card has no Set up, the tray no Phone link; Set up, a stored phone.json, the old /api/away paths and Forget can't start it; a copy that had it on keeps its phones on the home Wi-Fi and is told once")
 def u_link_offered():
     from types import SimpleNamespace
     from undercover.app import phone_api
     from undercover.core import phone, tailnet, trayicon
     from undercover.core.phone import PhoneError
     from undercover.core.voices import ModelError
-    assert tailnet.OFFERED is True, "the phone link's setup is hidden: only a release decides that"
+    import re as _re
+    src = (ROOT / "undercover" / "core" / "tailnet.py").read_text(encoding="utf-8")
+    assert _re.search(r"^OFFERED = False$", src, _re.M), "the phone link is offered in the tree: only the release that offers it flips this (and this check)"
+    assert 'os.environ.get("UNDERCOVER_TEST_LINK") == "1" and os.environ.get("UNDERCOVER_TEST_ROOTS")' in src   # (test mode only)
     with isolated_data():
         phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
         phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
@@ -15995,6 +16007,36 @@ def u_link_offered():
             assert started == [] and phone_api._A["srv"] is None, "the link's listener opened while it isn't offered"
             h = SimpleNamespace(remote=False, _body=lambda: {"on": False}, _json=lambda o: o)
             assert phone_api._route(h, "POST", "/api/phone")["enabled"] is False   # (Off still works)
+            # a phone.json that says on (a 1.1 copy with Away from home, or a test's): the start opens nothing
+            f = phone.state_file()
+            f.write_text(json.dumps({"enabled": True, "away": True, "devices": []}), encoding="utf-8")
+            phone._STATE.clear()
+            phone._FILE[0] = None
+            assert phone.enabled()
+            made = []
+            saved_make = (phone_api._L["make"], phone_api._A["make"])
+            real_thread = phone_api.threading.Thread
+            phone_api.threading.Thread = lambda *a, **k: SimpleNamespace(start=lambda: None)   # (setup's minute loop: not here)
+            try:
+                phone_api.setup(lambda *a: made.append(("lan", a)), 7999, make_away=lambda *a: made.append(("away", a)))
+            finally:
+                phone_api.threading.Thread = real_thread
+                phone_api._L["make"], phone_api._A["make"] = saved_make
+            assert not [m for m in made if m[0] == "away"] and started == [] and phone_api._A["srv"] is None, made
+            # the old away-from-home routes (1.1, 1.2): gone, so nothing there to turn on
+            for p in ("/api/away", "/api/away/on", "/api/away/start"):
+                assert phone_api.handle(SimpleNamespace(remote=False), "POST", p) is False, p
+            # Forget never starts the daemon while hidden (CI-84): the keys go unread, so the node can't come online
+            sd = tailnet.state_dir()
+            sd.mkdir(parents=True, exist_ok=True)
+            (sd / "tailscaled.state").write_text("{}", encoding="utf-8")
+            real_daemon, ran = tailnet._start_daemon, []
+            tailnet._start_daemon = lambda: ran.append("daemon")
+            try:
+                tailnet.forget()
+            finally:
+                tailnet._start_daemon = real_daemon
+            assert ran == [] and not sd.exists(), "Forget started the daemon, or kept the keys, while the link is hidden"
         finally:
             tailnet.OFFERED = True
             tailnet.start = real_start

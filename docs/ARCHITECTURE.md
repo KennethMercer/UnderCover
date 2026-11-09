@@ -719,8 +719,8 @@ runs at import, at save and every time a library theme is served; import and exp
 Off until the person sets it up. Since 1.2.1 there is one way in for every phone, at home and away: an HTTPS link,
 `https://<name>.ts.net`, from a hidden userspace Tailscale (`core/tailnet.py`: pinned MSI, hashes checked, no driver,
 no service) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
-never the PC's own listener. Windows-only for now (`platform.supports("away")`). A release can ship without the link's setup (`tailnet.OFFERED`, on by default):
-no Set up, no tray item, the link never starts; a PC that had it on keeps its home-Wi-Fi phones and is told once
+never the PC's own listener. Windows-only for now (`platform.supports("away")`). A release can ship without the link's setup (`tailnet.OFFERED`; off in 1.2, the user's
+call): no Set up, no tray item, the link never starts and Forget never starts the daemon; a PC that had it on keeps its home-Wi-Fi phones and is told once
 (web/whatsnew.js). Set up, on the PC, is the switch: it
 fetches the piece, then waits for Tailscale's sign-in and its one approval (`/api/phone`'s `phase`, with the two links,
 which never reach a phone). Turn off the phone link resets Funnel and stops the daemon, so nothing reaches the PC from a
