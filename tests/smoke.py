@@ -9565,6 +9565,10 @@ def u_duets():
             assert OS.split_duet(text) == {"person": "Michael Jackson", "with": "Barry White", "voice": "barry-white-uc"}, text
         assert OS.split_duet("Michael Jackson and Prince") == {"person": "Michael Jackson", "with": "Prince", "voice": None}
         assert OS.split_duet("Simon and Garfunkel") is None and OS.split_duet("Hall and Oates") is None
+        # neither here: two singers only as two full names, never a band's ("the ...", a list with commas, one-word names)
+        assert OS.split_duet("Daryl Hall and John Oates") == {"person": "Daryl Hall", "with": "John Oates", "voice": None}
+        for band in ("Tom Petty and the Heartbreakers", "Peter, Paul and Mary", "Earth, Wind and Fire", "Sly and the Family Stone", "Mumford & Sons"):
+            assert OS.split_duet(band) is None, band
         assert OS.split_duet("Michael Jackson") is None and OS.split_duet("Michael Jackson and Michael Jackson") is None
     finally:
         OS.installed_for = real_inst
@@ -10024,7 +10028,24 @@ want("done, one", doneLine({song: {title: "Hold On"}, voice: bw, settings: {octa
      "with <b>Barry White</b> · the singer&#39;s octave · song 6 semitones lower", "taking turns");
 want("done, same voice", doneLine({song: {title: "x"}, voice: {...bw, name: "michael-jackson-uc"}, duet, settings: set}, 1), "with <b>Barry White</b> · the singer&#39;s octave", "taking turns");""")
     assert not out, "; ".join(out or [])
-    return "the cover's own key; both names in the say line; the alone line; " + (
+    # the one-shot's duet example on a new install (no voices but the demo): read as two singers, the first trained, the second said
+    ex = "Hello by Adele as Barry White and Michael Jackson"
+    ix = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+    assert f'<button type="button">{ex}</button>' in ix and "as Obama" not in ix.split('id="os-ex"')[1].split("</div>")[0]
+    assert '$$("#os-ex button").forEach(b => b.onclick = () => { $("#os-text").value = b.textContent; previewPlan();' in one   # (fills the field, plans)
+    keep = (service.installed_for, OS.installed_for, service.online_for, service.check_failed, service.subject_of, A.settle, A.choices_for, A.recall)
+    service.installed_for = OS.installed_for = lambda p: []
+    service.online_for, service.check_failed = (lambda p, n=2: []), (lambda p: None)
+    service.subject_of = lambda p, pick=None: {"kind": "person", "label": f"{p} is a real person.", "choices": []}
+    A.settle, A.choices_for, A.recall = (lambda req, search=None: req), (lambda *a, **k: []), (lambda *a, **k: None)
+    try:
+        with isolated_data():
+            p = plan_of(ex)
+        assert p["person"] == "Barry White" and p["artist"] == "Adele" and p["voice"]["how"] == "train" and p["voice"]["display"] == "Barry White", p
+        assert p["duet"]["with"] == "Michael Jackson" and p["duet"]["alone"].startswith("Michael Jackson isn't one of your voices yet, so Barry White sings it alone."), p
+    finally:
+        service.installed_for, OS.installed_for, service.online_for, service.check_failed, service.subject_of, A.settle, A.choices_for, A.recall = keep
+    return "the cover's own key; both names in the say line; the alone line; the duet example; " + (
         "no Chrome here: the page's lines not run" if out is None else "the plan's rows and the done line in Chrome")
 
 
@@ -13306,7 +13327,7 @@ def u_page_rules():
     # rc-page12 (the user's install on D:): no copy assumes the app is on C: ("keep UnderCover on C: and its files somewhere roomier")
     assert not re.search(r"\bon C:|\bC: drive|drive C\b", ix), "the page assumes UnderCover is on C: again"
     # rc-page13 (the user's pick, after Internal Affairs proved them on a fresh library): FrontMan's three examples, in this order
-    assert re.findall(r'<button type="button">([^<]+)</button>', ix[ix.index('id="os-ex"'):].split("</div>")[0]) == ["Pink Pony Club as Plankton", "Freek-a-Leek as Obama", "Hello by Adele as Peter Griffin"], "FrontMan's examples aren't the three the user picked"
+    assert re.findall(r'<button type="button">([^<]+)</button>', ix[ix.index('id="os-ex"'):].split("</div>")[0]) == ["Pink Pony Club as Plankton", "Hello by Adele as Barry White and Michael Jackson", "Freek-a-Leek as Peter Griffin"], "FrontMan's examples aren't the three the user picked (1.2: a duet in the middle)"
     # rc-ui1 (the user's option A, the maintainers' mockup, meta-options): the line under a name is chips (facts()), in plain words, Deep's facts as data-deep chips;
     # FrontMan's two "Set it up yourself" cards open on a search field (icon, border, Search button), the song's above the chosen song
     assert "function facts(list)" in app and "const countWord" in app and "const sourceWord" in app and "function dayWord" in app and ".fact {" in css and ".fact.muted" in css, "the chips helper or their look is gone"

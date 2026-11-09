@@ -107,8 +107,10 @@ _DUET_JOIN = re.compile(r"\s+(?:and|&|with)\s+", re.I)
 def split_duet(person: str) -> dict | None:
     """"<song> as <one singer> and <another>" (also "with", "&", "a duet of ..."): two singers taking turns, in the order
     written (1.2, duets.py). Only when the second one is a voice here, or the first is and the second isn't (then the
-    first sings alone, said plainly); never when the whole name is one voice ("Simon and Garfunkel"), and not for two
-    names neither of which is here (a band's name). -> {person, with, voice (the second's, or None)} or None."""
+    first sings alone, said plainly); never when the whole name is one voice ("Simon and Garfunkel"). Two names neither of
+    which is here are two singers only when each is a full name and the second isn't "the ..." ("Barry White and Michael
+    Jackson", the one-shot's duet example on a new install); otherwise they're a band's name ("Hall and Oates", "Tom
+    Petty and the Heartbreakers", "Peter, Paul and Mary"). -> {person, with, voice (the second's, or None)} or None."""
     from ..core.voices import slug
     p = re.sub(r"^(?:an?\s+)?duet\s+(?:of|by|between|with)?\s*", "", (person or "").strip(), flags=re.I)
     p = re.sub(r"\s+(?:as\s+)?(?:an?\s+)?duet$", "", p, flags=re.I)
@@ -123,7 +125,8 @@ def split_duet(person: str) -> dict | None:
         return None
     va, vb = installed_for(a) or [], installed_for(b) or []
     vb = [v for v in vb if not va or v.name != va[0].name]
-    if not (va or vb):
+    full = lambda n: len(n.split()) >= 2 and "," not in n   # (a first and last name; a list with commas is a band's)
+    if not (va or vb) and not (full(a) and full(b) and not re.match(r"the\s", b, re.I)):
         return None
     return {"person": a, "with": b, "voice": vb[0].name if vb else None}
 
