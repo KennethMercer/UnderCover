@@ -566,7 +566,7 @@ def run_job(job: "Job", fn):
         job.finish("cancelled", message="Cancelled.")
         return
     if storage.MOVING:   # SafeHouse is moving UnderCover's files: nothing may read or write them meanwhile
-        job.finish("error", message="UnderCover's files are being moved (SafeHouse → Storage). Try again when that's done.")
+        job.finish("error", message=storage.MOVING_WHY)
         return
     from . import worklist
     if job.kind in worklist.PAUSABLE and job.kind not in worklist.PARTLY_PAUSABLE and (job.pausing or worklist.held()):

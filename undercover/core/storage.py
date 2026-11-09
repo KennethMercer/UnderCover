@@ -200,8 +200,36 @@ def targets(group: str, folder: Path) -> list[tuple[str, Path, Path]]:
     return out
 
 
+MOVING_WHY = "UnderCover's files are being moved (SafeHouse → Storage). Try again when that's done."
+_WRITES = {"n": 0}   # uploads and installs landing in UnderCover's folders outside a job, right now: a move waits for them
+_WRITES_LOCK = threading.Lock()
+
+
+def moving_why() -> str | None:
+    """What a route that writes into UnderCover's folders says while a move runs (refused: a song dropped during a
+    cross-drive copy landed in the old folder, and the move failed "N files didn't copy correctly"), else None."""
+    return MOVING_WHY if MOVING else None
+
+
+def start_writing() -> str | None:
+    """An upload or install into UnderCover's folders that isn't a job (a dropped song or voice, a song from YouTube)
+    begins: -> MOVING_WHY (refused) while a move runs, else None, and a move doesn't start until done_writing()."""
+    with _WRITES_LOCK:
+        if MOVING:
+            return MOVING_WHY
+        _WRITES["n"] += 1
+    return None
+
+
+def done_writing():
+    with _WRITES_LOCK:
+        _WRITES["n"] = max(0, _WRITES["n"] - 1)
+
+
 def _busy() -> str | None:
     from . import jobs, worklist
+    if _WRITES["n"]:
+        return "the upload under way"
     for j in jobs.JOBS.values():
         if not j.finished and j.kind != "move":
             return j.title or j.kind
@@ -431,7 +459,10 @@ def move(group: str, folder: str, job, from_room: bool = False, confirmed: bool 
     if why:
         raise ModelError(why)
     skips = {k: _skips(k) for k, _, _ in moves}
-    MOVING.update(group=group, job=job.id)
+    with _WRITES_LOCK:   # (with the uploads' check: one that started after check() is waited for, never copied halfway)
+        if _WRITES["n"]:
+            raise ModelError("Wait for the upload under way to finish first: nothing else can run while files move.")
+        MOVING.update(group=group, job=job.id)
     done_keys, copied = [], []
     defaults = {k: d for g in GROUPS.values() for k, _, d in g}
     switched = False   # once the setting points at the new place, a failure switches it back before removing anything

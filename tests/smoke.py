@@ -13157,6 +13157,67 @@ def u_work_space():
     return "E: judged, named by the guard, Doctor and the Library"
 
 
+@check("while a Storage move runs, a dropped song or voice, a song from YouTube and a voice install are refused (409, "
+       "nothing written, the body left unread); an upload under way holds a move back")
+def u_upload_moving():
+    import io
+    from types import SimpleNamespace
+    from undercover.app import server as S
+    from undercover.core import config, storage
+    from undercover.frontman import api as F, songs
+    saved = (dict(storage.MOVING), dict(storage._WRITES), songs.download, dict(S.JOBS))
+    fetched = []
+
+    def handler(cls=None, headers=None, body=b""):
+        h = S.Handler.__new__(S.Handler) if cls else SimpleNamespace()
+        out = {}
+        h.headers = headers or {}
+        h.rfile = io.BytesIO(body)
+        h.close_connection = False
+        h._length = lambda: len(body)
+        h._json = lambda obj, status=200: out.update(obj=obj, status=status)
+        h._error = lambda msg, status=400: out.update(obj={"error": msg}, status=status)
+        return h, out
+    try:
+        with isolated_data():
+            up = config.path("uploads_dir")
+            up.mkdir(parents=True, exist_ok=True)
+            songs.download = lambda *a, **k: fetched.append(a) or {}
+            storage.MOVING.update(group="library", job="x")
+            h, out = handler(headers={"X-Filename": "song.mp3"}, body=b"\0" * 4096)
+            F._upload(h)
+            assert out["status"] == 409 and "being moved" in out["obj"]["error"] and h.close_connection, out
+            assert h.rfile.tell() == 0 and not any(up.iterdir()), "the song was read or written during the move"
+            h, out = handler()
+            F._song_from_youtube(h, {"id": "dQw4w9WgXcQ", "title": "t", "raw_title": "t", "channel": "c", "duration": 1})
+            assert out["status"] == 409 and not fetched, out
+            h, out = handler(cls=True, headers={"X-Filename": "v.zip"}, body=b"PK" + b"\0" * 100)
+            h._voice_upload()
+            assert out["status"] == 409 and h.close_connection and h.rfile.tell() == 0, out
+            h, out = handler(cls=True)
+            before = len(S.JOBS)
+            h._start_install({"url": "https://huggingface.co/x/y/resolve/main/v.zip", "name": "v"})
+            assert out["status"] == 409 and len(S.JOBS) == before, out
+            assert storage._WRITES["n"] == 0, storage._WRITES
+            # the other way round: an upload under way, and a move waits for it
+            storage.MOVING.clear()
+            assert storage.start_writing() is None
+            try:
+                assert storage._busy() == "the upload under way", storage._busy()
+            finally:
+                storage.done_writing()
+            assert storage._busy() != "the upload under way" and storage._WRITES["n"] == 0
+    finally:
+        storage.MOVING.clear()
+        storage.MOVING.update(saved[0])
+        storage._WRITES.clear()
+        storage._WRITES.update(saved[1])
+        songs.download = saved[2]
+        S.JOBS.clear()
+        S.JOBS.update(saved[3])
+    return "four routes refused with the move's own words; a move waits for an upload"
+
+
 @check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")
 def u_perf_history():
     from undercover.frontman import history as hstore, pipeline
@@ -15645,7 +15706,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_perf_history, u_perf_library):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

@@ -787,6 +787,9 @@ class Handler(BaseHTTPRequestHandler):
             src = res[int(n) - 1]
         if not src:
             return self._error("Paste a link or pick a search result.")
+        from ..core import storage
+        if storage.moving_why():   # (a voice landing in the old folder mid-copy fails the move; once queued, a move waits)
+            return self._error(storage.moving_why(), 409)
         job = Job("install", title=f"Installing {name or getattr(src, 'name', None) or 'a voice'}")
         JOBS[job.id] = job
 
@@ -911,8 +914,14 @@ class Handler(BaseHTTPRequestHandler):
         if not n or n > CONFIG["voices"]["max_download_gb"] * 1e9:
             return self._error("That file is empty or too large to be a voice model.")
         name = unquote(self.headers.get("X-Name") or "") or _guess_name("", fname)
-        work = Path(tempfile.mkdtemp(prefix="vup_", dir=path("cache_dir")))
+        from ..core import storage
+        why = storage.start_writing()   # (refused while a Storage move runs; a move waits for it)
+        if why:
+            self.close_connection = True   # (the body isn't read)
+            return self._error(why, 409)
+        work = None
         try:
+            work = Path(tempfile.mkdtemp(prefix="vup_", dir=path("cache_dir")))
             f = work / fname
             with open(f, "wb") as out:
                 left = n
@@ -934,7 +943,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(str(e))
             self._json({"voice": v.name})
         finally:
-            shutil.rmtree(work, ignore_errors=True)
+            if work is not None:
+                shutil.rmtree(work, ignore_errors=True)
+            storage.done_writing()
 
     def _open_folder(self, body: dict):
         """Show a cover in the file manager (by history id), or open the output folder (core/platform)."""
