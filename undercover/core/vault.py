@@ -679,11 +679,13 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
             raise ModelError(storage.refuse([t]))
     if on_conflict == "replace" and any(t.exists() for _, _, t in plan):
         run(folder)   # what's there now goes into the vault first, so replacing loses nothing
+    # the settings are made up before anything is written: one that can't keep this install's [paths] stops it all
+    settings_data = {key: _config_keeping_paths(get(root / "objects", sha)) for key, sha, t in plan
+                     if storage._same(t, config.CONFIG_FILE)}
     done = []
     for key, sha, t in plan:
-        if storage._same(t, config.CONFIG_FILE):
-            data = _config_keeping_paths(get(root / "objects", sha))
-            _write_part(t, [data])
+        if key in settings_data:
+            _write_part(t, [settings_data[key]])
         else:
             obj = find_object(root / "objects", sha)
             if obj is None:
@@ -729,7 +731,12 @@ def _config_keeping_paths(data: bytes) -> bytes:
     # this install's [paths], or none when it uses the default folders (a vaulted [paths] from elsewhere never comes in)
     new = config.replace_section(old, "paths", config.section_text(cur, "paths"))
     import tomllib
-    tomllib.loads(new)   # never write a config the app can't read back
+    try:
+        got, here = tomllib.loads(new), tomllib.loads(cur) if cur else {}   # never write a config the app can't read back
+    except tomllib.TOMLDecodeError as e:
+        raise ModelError(f"The vault's settings file can't be read back here ({e}); nothing was restored.")
+    if got.get("paths") != here.get("paths"):   # never a config that points this install's folders somewhere else
+        raise ModelError("The vault's settings couldn't keep where this install's folders are; nothing was restored.")
     return new.encode("utf-8")
 
 

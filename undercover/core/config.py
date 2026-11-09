@@ -63,21 +63,30 @@ os.environ.setdefault("MIOPEN_LOG_LEVEL", "3")  # errors only; FAST find mode lo
 def set_in_text(text: str, section: str, values: dict) -> str:
     """config text with keys set in one section (values are TOML literals: '"x"', a literal-string path, "true"),
     keeping everything else (comments, order) as it is. A missing key or section is added."""
-    head = re.compile(rf"(?ms)^\[{re.escape(section)}\][ \t]*\r?$(.*?)(?=^\[|\Z)")   # (a CRLF file too)
+    head = re.compile(rf"(?ms){_header(section)}(.*?)(?={_ANY_HEADER}|\Z)")
     m = head.search(text)
     if not m:
         text = (text.rstrip("\n") + "\n\n" if text.strip() else text) + f"[{section}]\n"
         m = head.search(text)
     body = m.group(1)
     for key, val in values.items():
-        rx = re.compile(rf"(?m)^{re.escape(key)}[ \t]*=.*$")
+        rx = re.compile(rf"(?m)^([ \t]*){re.escape(key)}[ \t]*=[^\r\n]*")   # (an indented key too; a CRLF line keeps its \r)
         line = f"{key} = {val}"
-        body = rx.sub(lambda _: line, body, count=1) if rx.search(body) else body.rstrip("\n") + f"\n{line}\n\n"
+        body = rx.sub(lambda mm: mm.group(1) + line, body, count=1) if rx.search(body) else body.rstrip("\n") + f"\n{line}\n\n"
     return text[:m.start(1)] + body + text[m.end(1):]
 
 
+# A table's header line as people write it by hand: indented or not, a comment after it, a CRLF file (2026-11-08: a
+# "[paths]  # where files live" line wasn't found, so every write added a second [paths] the app couldn't read).
+_ANY_HEADER = r"^[ \t]*\[\[?[^\[\]\r\n]+\]\]?[ \t]*(?:#[^\r\n]*)?\r?$"
+
+
+def _header(section: str) -> str:
+    return rf"^[ \t]*\[[ \t]*{re.escape(section)}[ \t]*\][ \t]*(?:#[^\r\n]*)?\r?$"
+
+
 def _section_rx(section: str):
-    return re.compile(rf"(?ms)^\[{re.escape(section)}\][ \t]*\r?$.*?(?=^\[|\Z)")
+    return re.compile(rf"(?ms){_header(section)}.*?(?={_ANY_HEADER}|\Z)")
 
 
 def section_text(text: str, section: str) -> str | None:
