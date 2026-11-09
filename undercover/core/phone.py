@@ -129,13 +129,34 @@ def _load() -> dict:
     return _expire(_STATE)
 
 
+def _quiet(d: dict, now: float) -> bool:
+    """A paired phone none of whose tokens works any more: each unused for TOKEN_IDLE_S (or never minted)."""
+    def alive(key, used):
+        return bool(d.get(key)) and (d.get(used) is None or now - float(d[used]) <= TOKEN_IDLE_S)
+    return not d.get("pending") and not alive("hash", "used") and not alive("lan_hash", "lan_used")
+
+
 def _expire(st: dict) -> dict:
     """On every read: a phone that claimed and was never allowed is forgotten after PENDING_S, and so is a move never
-    allowed (the phone's page has stopped waiting by then; Allow on it would make a phone that never gets its token)."""
+    allowed (the phone's page has stopped waiting by then; Allow on it would make a phone that never gets its token).
+    A phone unused for TOKEN_IDLE_S has stopped by itself: it's forgotten too (it pairs again with a new code), so a
+    lost phone doesn't stay on the card or count toward MAX_DEVICES, and its streams end."""
     now = time.time()
-    keep = [d for d in st["devices"] if not (d.get("pending") and now - float(d.get("asked") or 0) > PENDING_S)]
+    quiet = [d for d in st["devices"] if _quiet(d, now)]
+    keep = [d for d in st["devices"] if not (d.get("pending") and now - float(d.get("asked") or 0) > PENDING_S)
+            and d not in quiet]
     if len(keep) != len(st["devices"]):
         st["devices"][:] = keep
+        if quiet:
+            _relan(st)
+            try:
+                _save()   # (forgotten in the file too, and said once)
+            except (OSError, PhoneError):
+                pass
+            from .doctor import log
+            for d in quiet:
+                log(f"Your phone: {d.get('name') or 'a phone'} wasn't used for {TOKEN_IDLE_S // 86400} days, so it was "
+                    "let go. It can connect again with a new code.")
     for d in keep:
         if d.get("move_nonce") and now - float(d.get("move_asked") or 0) > PENDING_S:
             d.pop("move_nonce", None), d.pop("move_asked", None)
@@ -205,8 +226,8 @@ def move_code(device_id: str) -> str:
         if d is None or not d.get("lan_hash") or d.get("pending"):
             raise PhoneError("That phone isn't paired.", 404)
         now = time.time()
-        for k in [k for k, (_, exp) in _MOVE_CODES.items() if exp < now]:
-            _MOVE_CODES.pop(k)
+        for k in [k for k, (dev, exp) in _MOVE_CODES.items() if exp < now or dev == device_id]:
+            _MOVE_CODES.pop(k)   # (and this phone's last one: one live code a phone)
         code = secrets.token_urlsafe(16)
         _MOVE_CODES[hash_token(code)] = (device_id, now + MOVE_CODE_S)
         return code
@@ -323,7 +344,8 @@ def pairing() -> dict | None:
 
 
 def clean_name(name: str) -> str:
-    name = re.sub(r"[\x00-\x1f\x7f<>\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", str(name or "")).strip()   # (no bidi controls)
+    # (no bidi controls; no half a character, which can't be written)
+    name = re.sub(r"[\x00-\x1f\x7f<>\u200e\u200f\u202a-\u202e\u2066-\u2069\ud800-\udfff]", "", str(name or "")).strip()
     return re.sub(r"\s+", " ", name)[:40] or "Phone"
 
 
@@ -340,7 +362,7 @@ def claim(code: str, name: str, addr: str = "") -> tuple[str, dict]:
         if win is None:
             raise PhoneError("", 401, generic=True)
         short = PAIRING["short"]
-        if hmac.compare_digest(raw.encode(), PAIRING["code"].encode()):
+        if hmac.compare_digest(raw.encode("utf-8", "surrogatepass"), PAIRING["code"].encode()):
             pass
         elif short and hmac.compare_digest(re.sub(r"[^A-Z0-9]", "", raw.upper()).encode(), short["code"].encode()):
             pass
@@ -431,7 +453,7 @@ def pending() -> list[dict]:
 # ---------------------------------------------------------------- devices
 
 def hash_token(token: str) -> str:
-    return hashlib.sha256(str(token).encode()).hexdigest()
+    return hashlib.sha256(str(token).encode("utf-8", "surrogatepass")).hexdigest()   # (any string the wire brings)
 
 
 def match_of(nonce_hash: str | None) -> str | None:
