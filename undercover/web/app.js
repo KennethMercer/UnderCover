@@ -773,7 +773,7 @@ function summary() {
   previewSync();
   $("#adv-sum").textContent = `${o.fit ? "pitch fit to the voice" : pitchText(o)} · likeness ${(+(o.index_ratio ?? 0)).toFixed(2)} · ${o.quality || "high"} quality` +
     (o.duet_voice ? ` · ${duetBackSaid(o.duet_backing)}`
-      : o.backing_voice ? ` · backing by ${voiceDisplay(o.backing_voice)}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
+      : o.backing_voice ? (o.backing_voice === S.voice ? " · lead + backing converted" : ` · backing by ${voiceDisplay(o.backing_voice)}`) : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
   const ready = S.song && S.voice;
   const busy = !!S.job || !!S.osBusy;   // a one-shot cover uses the GPU queue too
   $("#convert").disabled = !ready || busy;
@@ -785,7 +785,8 @@ function summary() {
   else {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
     // a backing voice carried over (Use these settings) stays on when the lead changes: it is said here, with a way to clear it, never silently (IA P9-3)
-    const bk = S.opts.backing_voice && !S.opts.duet_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals <button class="linkbtn" type="button" id="clear-backing">Use the original singer's backing</button>` : "";
+    // (the one-shot converts the backing in the lead's own voice: said as that, not the voice twice)
+    const bk = S.opts.backing_voice && !S.opts.duet_voice ? `${S.opts.backing_voice === S.voice ? ", backing vocals too" : ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals`} <button class="linkbtn" type="button" id="clear-backing">Use the original singer's backing</button>` : "";
     const du = S.opts.duet_voice ? ` and <b>${vname(S.opts.duet_voice)}</b>, taking turns <button class="linkbtn" type="button" id="clear-duet">Just one singer</button> <span class="meta">· ${duetBackSaid(o.duet_backing)}</span>` : "";
     $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${du}${bk} <span class="meta" data-deep>· ${o.fit ? "pitch fit to the voice" : pitchText(o)}</span><span class="meta">${est}</span>`;
   }

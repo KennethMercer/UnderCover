@@ -6562,6 +6562,7 @@ def u_desk_plan():
             assert o["ask"] is False and not o.get("voice_ask") and "choices" not in o, o
             assert o["voice"]["how"] == "installed" and o["voice"]["name"] == "agent-smoke" and o["voice"]["demo"], o
             assert o["from_library"]["id"] == sid and "sample song in your library" in o["note"] and "subject" not in o, o
+            assert abs(o["from_library"]["seconds"] - 3) < 0.2, o["from_library"]   # its length: the plan says "a 3-second excerpt" (InternalAffairs, 1.2)
             assert oneshot.sample_song("hold on", "Ken Mercer")["id"] == sid
             for title, artist in (("Hold On", "Wilson Phillips"), ("Hold", None), ("Hold On Tight", None)):
                 assert oneshot.sample_song(title, artist) is None, (title, artist)
@@ -13099,7 +13100,26 @@ def u_first_walk():
     const summ = drives => ({ categories: cats, total: 19.1e9, free: drives[0].free, drive: drives[0].drive, drives, counts: {}, tabs: { kept: {}, recent: {} } });
     window.api = async () => summ([{ drive: "C:", free: 21.4e9 }]); await loadSummary(); const oneDrive = $("#lib-free").textContent;
     window.api = async () => summ([{ drive: "C:", free: 21.4e9 }, { drive: "D:", free: 300e9 }]); await loadSummary(); const twoDrives = $("#lib-free").textContent;
+    // F7: the one-shot's plan for the sample song and a voice; the desk after the tour's cover (the backing in the lead's own voice)
+    const planned = { song_query: "Hold On", song: "Hold On", person: "Agent Smoke", style: null, ask: false, eta_s: { low: 40, high: 60 },
+      from_library: { id: "abc", title: "Hold On", artist: "", seconds: 46.2 },
+      voice: { how: "installed", name: "agent-smoke", display: "Agent Smoke", trained: false, demo: true, quality: { ok: true, problems: [] } } };
+    window.api = async () => { throw new Error("no API here"); };
+    noteVoices([{ name: "agent-smoke", display: "Agent Smoke", demo: true, trained: false }, { name: "some-one-uc", display: "Some One", trained: true }]);
+    drawPlan(planned); const sampleLine = $("#os-plan").textContent;
+    drawPlan({ ...planned, from_library: undefined, person: "Some One", voice: { how: "installed", name: "some-one-uc", display: "Some One", trained: true, quality: { ok: true, problems: [] } } });
+    const trainedLine = $("#os-plan").textContent;
+    ok(`F7 the sample song and the demo voice (${sampleLine.slice(0, 140)})`, /Hold On, a 46-second excerpt: the sample song that comes with UnderCover/.test(sampleLine)
+       && /Agent Smoke, the demo voice/.test(sampleLine) && !/album version|your voice/.test(sampleLine));
+    ok(`F7 a voice trained here is said so once (${trainedLine.slice(0, 140)})`, (trainedLine.match(/trained (here|in UnderCover)/g) || []).length === 1);
+    const wasSong = S.song, wasVoice = S.voice, wasOpts = S.opts;
+    S.song = { title: "Hold On" }; S.voice = "agent-smoke"; S.opts = { ...S.opts, backing_voice: "agent-smoke", duet_voice: "", karaoke: true };
+    summary(); const desk = $("#summary").textContent, adv = $("#adv-sum").textContent;
+    S.opts = { ...S.opts, backing_voice: "some-one-uc" }; summary(); const other = $("#summary").textContent;
+    S.song = wasSong; S.voice = wasVoice; S.opts = wasOpts;
     window.api = realApi;
+    ok(`F7 the desk after the tour (${desk.slice(0, 120)} / ${adv.slice(0, 120)})`, /sung by Agent Smoke, backing vocals too/.test(desk) && !/on backing vocals/.test(desk)
+       && /lead \+ backing converted/.test(adv) && !/backing by/.test(adv) && / on backing vocals/.test(other));
     ok(`F6 the Library's free line (${$("#lib-total").textContent} ${oneDrive} / ${twoDrives})`, oneDrive === `on drive C: · ${gb(21.4e9)} free`
        && twoDrives === `in all · C: ${gb(21.4e9)} free · D: ${gb(300e9)} free`);
     ok("F5 no .bat left in the page's copy", !/UnderCover\.bat/.test($("#room-system").textContent) && /^Start it again from the Start menu, then reload this page\.$/.test(startAgain(", then reload this page")));
