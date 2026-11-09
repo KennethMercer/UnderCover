@@ -76,7 +76,7 @@ function voiceAskHtml(p) {
 }
 function voiceLine(v, p) {
   const who = esc(p?.person || v?.display || v?.name || "");
-  const a = aOrAn(p?.person || v?.display || v?.name || "");   // "an Obama voice", "a Eurovision voice"
+  const a = aOrAn(p?.person || v?.display || v?.name || "");   // "an Audrey Hepburn voice", "a Eurovision voice"
   if (p?.voice_ask) {
     const c = pickedVoice(p);
     return !c ? `<span class="warn">pick one below</span>` : c.voice ? `<b>${vname(c.voice)}</b>, used as it is`

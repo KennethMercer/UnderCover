@@ -49,7 +49,7 @@ function jobLine(j, withLeft = true) {
   return bits.join(" · ");
 }
 const jobName = j => j.title || JOB_KIND[j.kind] || j.kind;
-// a voice id read as a person ("barack-obama-uc" -> "Barack Obama"): the voice's display name when it's listed, else the id's own words; anything else as it is
+// a voice id read as a person ("johnny-cash-uc" -> "Johnny Cash"): the voice's display name when it's listed, else the id's own words; anything else as it is
 const niceName = s => !s ? "" : VOICES.has(s) ? voiceDisplay(s) : /^[a-z0-9]+(-[a-z0-9]+)*-uc$/.test(s) ? s.slice(0, -3).split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" ") : s;
 const WAIT_ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
 const byWait = run => run.sort((a, b) => ((WAIT_ORDER.indexOf(a.kind) + 1) || 9) - ((WAIT_ORDER.indexOf(b.kind) + 1) || 9));
