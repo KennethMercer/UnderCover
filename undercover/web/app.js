@@ -410,7 +410,7 @@ function presep() {
   }).catch(() => {});
 }
 function upload(file) {
-  if (S.job || S.osBusy) return showError("Wait for the current cover to finish (or cancel it) before loading another song.", "Busy");
+  if (S.job || S.osBusy) return showError("Wait for the current cover to finish (or cancel it) before loading another song.", "One cover at a time");
   setDrop("uploading");
   $("#up-name").textContent = file.name; $("#up-pct").textContent = "0%"; $("#up-bar").style.width = "0%";
   $("#up-note").textContent = "Loading…";
