@@ -765,6 +765,35 @@ def u_vault_replace_keeps_current():
     return "a locked file: nothing replaced; an Everything clip under What matters: vaulted first, named in the newest copy; the old copy held through the prune"
 
 
+@check("vault: a voice restored over its files is dropped from the converter's cache, so covers use what came back (2026-11-08: the cached model from before stayed until a restart)")
+def u_vault_restore_forgets_voice():
+    import types
+    from undercover.core import gpu, vault
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, path
+        saved_vault, saved_conv = dict(CONFIG.get("vault") or {}), gpu.MODELS._conv
+        try:
+            vd = path("voices_dir")
+            (vd / "spy").mkdir(parents=True)
+            (vd / "spy" / "meta.json").write_text(json.dumps({"name": "spy", "pth": str(vd / "spy" / "model.pth"),
+                                                              "extra": {"trained": True}}), encoding="utf-8")
+            (vd / "spy" / "model.pth").write_bytes(b"the vaulted model")
+            vault.set_folder(str(box / "vault-drive"))
+            vault.run()
+            (vd / "spy" / "model.pth").write_bytes(b"retrained")
+            gpu.MODELS._conv = types.SimpleNamespace(voices={"spy": "loaded before", "other": "loaded"})
+            r = vault.restore(["voices/spy/model.pth"], "replace")
+            assert r["restored"] == ["voices/spy/model.pth"] and (vd / "spy" / "model.pth").read_bytes() == b"the vaulted model", r
+            assert gpu.MODELS._conv.voices == {"other": "loaded"}, f"the converter still holds the voice from before: {gpu.MODELS._conv.voices}"
+            gpu.MODELS._conv.voices["spy"] = "loaded again"
+            vault.restore(["voices/spy/model.pth"], "both")   # the same here now: nothing written, nothing dropped
+            assert "spy" in gpu.MODELS._conv.voices
+        finally:
+            gpu.MODELS._conv = saved_conv
+            CONFIG["vault"] = saved_vault
+    return "replaced: dropped from the cache (the other voice kept); an identical one: left loaded"
+
+
 @check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
        "Checking it stage, the voice a finished training made in its job snapshot")
 def u_da_mode():
@@ -15576,7 +15605,7 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_config_hand_edited, u_vault_settings_both, u_vault_keep_both_copy, u_vault_replace_keeps_current, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_config_hand_edited, u_vault_settings_both, u_vault_keep_both_copy, u_vault_replace_keeps_current, u_vault_restore_forgets_voice, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

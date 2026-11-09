@@ -781,6 +781,12 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
             os.replace(part, t)
             if key in both and _record_of(key):
                 _as_copy(key, t, copy_n[key])
+        vd = path("voices_dir")
+        if storage._inside(t, vd) and not storage._same(t, vd):
+            # a voice's files changed under the converter: its cached copy goes after every file written (a cover that
+            # loaded it in between reloads it), so covers use what was restored, never the model from before
+            from . import gpu
+            gpu.forget_voice(Path(os.path.relpath(os.path.abspath(t), os.path.abspath(vd))).parts[0])
         done.append(key)
     return {"restored": done, "same": same, "skipped": conflicts if on_conflict == "skip" else [], "conflicts": []}
 
