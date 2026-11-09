@@ -265,7 +265,7 @@ function setRunning(on, title) {
 }
 const ORDER_OS = ["song", "voice", "cover"];
 const octaveWords = o => !o ? "the singer's octave" : `voice ${Math.abs(o) === 1 ? "one octave" : "two octaves"} ${o < 0 ? "lower" : "higher"}`;
-const keyWords = k => k ? `song ${Math.abs(k)} semitone${Math.abs(k) === 1 ? "" : "s"} ${k < 0 ? "lower" : "higher"}` : "";
+const keyWords = k => k ? `the song ${Math.abs(k)} semitone${Math.abs(k) === 1 ? "" : "s"} ${k < 0 ? "lower" : "higher"}` : "";
 // a duet's settings are the cover's own (one key for both, each singer at their own octave: the octaves stay in the why)
 const fitWords = (set, plan) => twoVoices(plan) ? keyWords(set.key) || "the song's own key"
   : octaveWords(set.octave) + (set.key ? ` · ${keyWords(set.key)}` : "");

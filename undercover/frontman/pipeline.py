@@ -17,7 +17,7 @@ from . import history as hstore
 
 
 DUET_NOTE = "Two singers in harmony: UnderCover can't separate them yet, so they're sung as one voice."   # phase 22: said plainly (the user: both ways were bad)
-DUET_BACKING_SAID = "Converting the backing vocals (both singers)"   # a duet's backing, in the two singers (the progress line)
+DUET_BACKING_SAID = "Converting the backing vocals in both voices"   # a duet's backing, in the two singers (the progress line)
 BACKING_QUIET_LUFS = -45.0   # a backing stem under this has nothing worth converting (a backing voice's or a duet's)
 # A processor install with nothing measured yet: the speeds below are a graphics card's, so the first guess is this many
 # times slower (unmeasured, deliberately on the slow side: "minutes, not a minute"). The first real cover's timings replace it.

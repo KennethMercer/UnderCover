@@ -679,7 +679,7 @@ def duet_settings(plan: dict, used: dict, notes: list) -> None:
 
 def duet_alone(with_: str, voice: str | None, first: str) -> str:
     """Why a duet asked for is sung by one voice: the second isn't a voice here, or it's the same voice as the first."""
-    return (f"{with_} is the same voice as {first} here, so it sings alone." if voice else
+    return (f"{with_} is the same voice as {first} here, so {first} sings it alone." if voice else
             f"{with_} isn't one of your voices yet, so {first} sings it alone. Get their voice in DoubleAgent, then ask again.")
 
 

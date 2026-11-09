@@ -322,8 +322,15 @@ def _word_at(doc: dict, t: float, end: bool = False) -> str | None:
     (Internal Affairs D2: a stretch from "Baby," was refused "at" the word before it)."""
     for w in (doc["words"] if end else reversed(doc["words"])):   # (words in time order: the later of two first, for a start)
         if w[1] <= t <= w[2]:
-            return w[0].strip()[:MAX_WORD]
+            return _quoted(w[0])
     return None
+
+
+def _quoted(word: str) -> str:
+    """A heard word as the sentences quote it: the quote marks the word, so the punctuation the transcript put after it goes
+    ("Baby," -> "Baby"). A word that is all punctuation stays as heard."""
+    w = word.strip()
+    return (w.rstrip(",.?!;:…\"”") or w)[:MAX_WORD]   # (and an ellipsis or a closing quote)
 
 
 def _clock(t: float) -> str:
@@ -332,14 +339,14 @@ def _clock(t: float) -> str:
 
 def _landed(doc: dict, t0: float, t1: float, a: tuple, b: tuple) -> str:
     """Where a stretch landed, as one sentence, when an edge moved or lands where the join may be heard (a dip): "It starts
-    just after "Baby," and ends just after "calling?" (0:13–0:18); the start may be heard." An edge that moved past a word
+    just after "Baby" and ends just after "calling" (0:13–0:18); the join at its start may be heard." An edge that moved past a word
     names that word, one that didn't names the word it stays next to (Internal Affairs D2: "moved past" read both ways, and
     named the same word at both ends of a one-word pick). "" when both edges landed where asked."""
     dips = [n for n, e in (("start", a), ("end", b)) if e[1] == "dip"]
     if abs(a[0] - t0) <= MOVED_S and abs(b[0] - t1) <= MOVED_S and not dips:
         return ""
     mid = lambda w: (w[1] + w[2]) / 2
-    say = lambda w: w[0].strip()[:MAX_WORD]
+    say = lambda w: _quoted(w[0])
     inside = [w for w in doc["words"] if a[0] <= mid(w) <= b[0]]
     before = [w for w in doc["words"] if mid(w) < a[0]]
     after = [w for w in doc["words"] if mid(w) > b[0]]
@@ -350,7 +357,7 @@ def _landed(doc: dict, t0: float, t1: float, a: tuple, b: tuple) -> str:
              else f"just before \"{say(inside[0])}\"" if inside else f"at {_clock(a[0])}")
     end = ("at the end of the song" if b[0] >= doc["duration"] - EDGE_S else f"just before \"{say(out1)}\"" if out1
            else f"just after \"{say(inside[-1])}\"" if inside else f"at {_clock(b[0])}")
-    heard = "; both joins may be heard" if len(dips) == 2 else f"; the {dips[0]} may be heard" if dips else ""
+    heard = "; both joins may be heard" if len(dips) == 2 else f"; the join at its {dips[0]} may be heard" if dips else ""
     return f"It starts {start} and ends {end} ({_clock(a[0])}–{_clock(b[0])}){heard}."
 
 
