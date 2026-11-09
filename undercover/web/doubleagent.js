@@ -11,7 +11,7 @@
 // and a textarea for why. Always blind (the user's call: the ear decides): the readings are only A and B, in an order
 // fixed per pair; keeping one says which it was.
 
-const DA = { samples: {}, all: false, audio: new Audio(), playing: null, cands: [],
+const DA = { samples: {}, all: false, audio: new Audio(), playing: null, cands: [], ledger: new Set(),
              f: daSavedF(), fx: {},   // "Your voices" filters: one chip pressed per group, or none (remembered per browser); fx: what filters now (daFilters)
              cad: null,   // "Let it speak" open on a card: { voice } (Now or Tonight, with the time)
              own: null,   // "Train my own" open on a card: { voice, mode } (Speaking / Singing taken from the voice where it says; "" = asked)
@@ -27,6 +27,19 @@ async function loadSamples() {
   try { DA.samples = Object.fromEntries((await api("/api/library/voices")).filter(v => v.sample).map(v => [v.name, v.sample])); }
   catch (e) { DA.samples = {}; }
   renderVoiceCards(DA.cands);
+}
+// Deep Cover's ledger on a voice card (bones wave 2, the user 2026-11-08): one line, the likeness and the training minutes, and "more"
+// opening every part in place (the voice, its cadence), kept open per voice across redraws
+function ledgerHtml(c) {
+  if (c.demo) return "";
+  const cd = c.cadence || {}, n = t => `<span class="lg-n">${esc(String(t))}</span>`, mins = c.minutes ? Math.round(c.minutes) : null;
+  const line = [c.likeness != null ? `likeness ${n((+c.likeness).toFixed(2))}` : "", mins ? `${n(mins)} min` : ""].filter(Boolean).join(" · ");
+  if (!line && !cd.has) return "";
+  const open = DA.ledger.has(c.voice);
+  const parts = [`voice · RVC${c.version ? " " + esc(c.version) : ""} · ${c.trained ? `trained here${mins ? ` from ${n(mins)} min of ${c.singing === false ? "speech" : "audio"}` : ""}` : "downloaded"}${c.likeness != null ? ` · likeness ${n((+c.likeness).toFixed(2))}${c.likeness_word ? ` (${esc(c.likeness_word)})` : ""}` : ""}`,
+    cd.has ? `cadence · ${esc(cd.engine || "?")}${cd.data_minutes != null ? ` · from ${n(cd.data_minutes)} min of speech` : ""}${cd.scores?.likeness != null ? ` · likeness ${n(cd.scores.likeness)}` : ""}${cd.scores?.cadence_gap != null ? ` · gap ${n(cd.scores.cadence_gap)}` : ""}` : ""].filter(Boolean);
+  return `<div class="vc-ledger" data-deep><span>${line || "voice"} · <button class="linkbtn" type="button" data-ledger="${esc(c.voice)}" aria-expanded="${open}">${open ? "less ▴" : "more ▾"}</button></span>
+    ${open ? `<ul>${parts.map(p => `<li>${p}</li>`).join("")}</ul>` : ""}</div>`;
 }
 function renderVoiceCards(cands) {
   DA.cands = cands || []; noteVoices(DA.cands);
@@ -46,11 +59,11 @@ function renderVoiceCards(cands) {
     const busy = running.has(c.target), cd = c.cadence || {};
     const im = DA.imp[c.voice];
     // basic: the likeness in a word (the server's; the page never sets the cut-offs), where it came from, what it's doing
-    const like = likeWord(c.likeness_word, "likeness"), num = c.likeness != null ? `likeness ${(+c.likeness).toFixed(2)}` : "";
+    const like = likeWord(c.likeness_word, "likeness");   // (the number is the ledger's, Deep Cover's)
     const origin = facts(c.demo ? ["Demo voice", { t: "Not a real person", muted: true }]
-      : [like ? { html: `<span class="nodeep">${like}</span>${num ? `<span data-deep>${num}</span>` : ""}` } : num ? { t: num, deep: true } : "", c.trained ? "Trained here" : "Downloaded",
+      : [like ? { html: like } : "", c.trained ? "Trained here" : "Downloaded",
          c.trained && c.singing != null ? { t: c.singing ? "Singing" : "Speech", muted: true } : "", !c.trained && c.person ? { t: c.person, muted: true } : "",
-         c.minutes ? { t: `${Math.round(c.minutes)} min`, deep: true } : ""]);
+        ]);
     const state = cd.queue === "running" ? "learning to speak" : cd.queue ? "learns to speak tonight" : "";
     const status = [state && `<span class="st now">${esc(state)}</span>`, cd.pending && `<span class="st now">new voice to hear</span>`, im?.candidate && `<span class="st now">retrained voice to hear</span>`].filter(Boolean).join("");
     const speaks = cd.has || c.demo ? `<svg class="ico vc-speaks" role="img" aria-label="Can speak in SpeakEasy"><title>Can speak in SpeakEasy</title><use href="#g-speakeasy"/></svg>` : "";
@@ -63,8 +76,7 @@ function renderVoiceCards(cands) {
     const ownOpen = DA.own?.voice === c.voice, cadOpen = DA.cad?.voice === c.voice;
     const abOpen = DA.ab?.voice === c.voice;
     const abBtn = cd.pending ? `<button class="mini" type="button" data-cad-ab="${esc(c.voice)}" aria-expanded="${abOpen}">${abOpen ? "Close" : "Listen and choose"}</button>` : "";
-    const cadDeep = cd.has ? facts([cd.engine && `cadence ${cd.engine}`, cd.data_minutes != null && `${cd.data_minutes} min`, cd.scores?.likeness != null && `likeness ${cd.scores.likeness}`,
-      cd.scores?.cadence_gap != null && `gap ${cd.scores.cadence_gap}`].filter(Boolean).map(t => ({ t, deep: true }))) : "";
+    const cadDeep = ledgerHtml(c);
     const cadBtn = !cd.can || cd.queue ? "" : cd.has ? `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}" data-deep>Retrain its cadence</button>`
       : `<button class="mini" type="button" data-cad="${esc(c.voice)}" aria-expanded="${DA.cad?.voice === c.voice}" title="${esc(cd.why || "")}">${DA.cad?.voice === c.voice ? "Close" : "Let it speak"}</button>`;
     return `<div class="vc ${busy ? "busy" : ""}">
@@ -77,6 +89,7 @@ function renderVoiceCards(cands) {
   $("#da-more").hidden = list.length <= 6;
   $("#da-more").textContent = DA.all ? "Show fewer" : `Show all ${list.length} voices`;
   $$("[data-listen]", box).forEach(b => b.onclick = () => listen(b.dataset.listen));
+  $$("[data-ledger]", box).forEach(b => b.onclick = () => { const v = b.dataset.ledger; DA.ledger.has(v) ? DA.ledger.delete(v) : DA.ledger.add(v); renderVoiceCards(DA.cands); });
   bindVoiceLines(box);
   $$("[data-use]", box).forEach(b => b.onclick = async () => { await loadVoices(b.dataset.use); showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" }); });
   $$("[data-improve]", box).forEach(b => b.onclick = async () => {

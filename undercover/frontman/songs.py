@@ -19,7 +19,7 @@ from pathlib import Path
 
 import soundfile as sf
 
-from ..core import manifest, platform
+from ..core import fsutil, manifest, platform
 from ..core.config import path
 from ..core.files import MAX_AUDIO_S
 from ..core.fsutil import retry
@@ -305,7 +305,7 @@ def register_song(tmp: Path, name: str, sha256_hex: str | None = None, extra: di
     info["duration"] = round(seconds, 3)
     meta = {"id": song_id, "name": name, "title": Path(name).stem, "file": dest.name, **info,
             "lufs": round(lufs(dest), 1), "peaks": peaks, "url": file_url(dest), **(extra or {})}
-    (up / f"{song_id}.json").write_text(json.dumps(meta), encoding="utf-8")
+    fsutil.write_text(up / f"{song_id}.json", json.dumps(meta))
     return meta
 
 

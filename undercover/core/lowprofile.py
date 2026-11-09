@@ -287,7 +287,8 @@ def apply(reserve_worker: bool = False):
     got = gpu.apply_cap(lim if lim is not None else float(card_gb() or 0) or None)
     from . import jobs
     jobs.STATUS["gpu_limit_gb"] = lim
-    _log(f"cap: server {lim if lim is not None else 'whole card'} GB, worker {STATE['worker_gb'] or 'none'} GB"
+    w = STATE["worker_gb"]
+    _log(f"cap: server {f'{lim} GB' if lim is not None else 'the whole card'}, worker {f'{w} GB' if w else 'none'}"
          + ("" if got is not None or lim is None else " (couldn't be applied)"))
 
 
@@ -368,7 +369,7 @@ def before_job(job) -> bool:
     ok, why = fits(kind)
     total = float(settings()["limit_gb"])
     if ok and getattr(job, "lp_hears", False) and total - 1.0 < worker_need("hear"):   # (it hears the song's words: Whisper)
-        ok, why = False, f"hears the song's words, which needs about {worker_need('hear') + 1.0:.0f} GB; Low profile allows {total:.0f}"
+        ok, why = False, f"hears the song's words, which {_needs_allows(worker_need('hear') + 1.0, total)}"
     if not ok and worker_running() and (STATE.get("worker_cap") or 0) > need:
         # a worker loaded with a bigger share than this job's (a cadence training's, before a speech): its share comes
         # back; the next request starts it with the right one
@@ -523,20 +524,35 @@ def fits(kind: str) -> tuple[bool, str]:
         return True, ""
     total = float(settings()["limit_gb"])
     if kind in WORKER_KINDS and worker_need(kind) + 1.0 > total:   # (the worker's part alone is more than the whole limit)
-        return False, f"needs about {worker_need(kind) + 1.0:.0f} GB; Low profile allows {total:.0f}"
+        return False, _needs_allows(worker_need(kind) + 1.0, total)
     need = need_gb(kind)
     if need is None or need <= lim:
         return True, ""
-    return False, f"needs about {need:.0f} GB; Low profile allows {lim:.0f}"
+    return False, _needs_allows(need, lim)
+
+
+def _gb(x: float) -> str:
+    return f"{x:.1f}".removesuffix(".0")
+
+
+def _needs_allows(need: float, lim: float) -> str:
+    """ "needs about N GB; Low profile allows M": the need rounded up and the allowance down, to a tenth, so a job that
+    doesn't fit never reads "needs about 4 GB; allows 4" (both once rounded to the nearest GB)."""
+    import math
+    return (f"needs about {_gb(math.ceil(round(need * 10, 6)) / 10)} GB; "
+            f"Low profile allows {_gb(math.floor(round(lim * 10, 6)) / 10)}")
 
 
 def wait_to_fit(job, kind: str, sleep=time.sleep) -> bool:
     """A job that can't fit says so and waits for the cap to lift (Low profile off, or a higher limit); it doesn't run
-    out of memory. -> True to run, False when it was cancelled meanwhile."""
+    out of memory. -> True to run, False when it was cancelled meanwhile. When it fits, the cap it fits under is applied
+    first: a limit raised while the job waited (change() leaves the cap alone while a job is current) was never set,
+    and the retry ran out under the old one (the maintainers' notes, bug hunt 2026-11-08)."""
     said = None
     while True:
         ok, why = fits(kind)
         if ok:
+            apply(reserve_worker=kind in WORKER_KINDS and kind not in TRAIN_KINDS)
             return True
         if getattr(job, "cancel", False):
             return False

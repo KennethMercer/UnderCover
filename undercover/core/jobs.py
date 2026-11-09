@@ -5,14 +5,13 @@ Every module's GPU work is a Job run by `gpu_worker`, so the models stay loaded 
 """
 import os
 import queue
-import shutil
 import threading
 import time
 import traceback
 import uuid
 from pathlib import Path
 
-from .config import CONFIG, ROOT, path
+from .config import CONFIG, path
 
 
 class Cancelled(Exception):
@@ -102,6 +101,15 @@ def friendly(e: BaseException, stage: str = "") -> str:
                 "or pick 'Fast' separation quality.")
     if name in ("NoBackendError", "LibsndfileError") or "could not be opened" in text.lower():
         return "That audio file couldn't be read. Try converting it to mp3, wav or flac first."
+    if isinstance(e, MemoryError):
+        return ("The PC ran out of memory (RAM). Close other big programs and try again; a shorter song needs less.")
+    if isinstance(e, OSError) and (e.errno == 28 or getattr(e, "winerror", None) in (39, 112)):   # ENOSPC; Windows' disk full
+        return ("The disk is full. Free some space, or move UnderCover's files to another drive in SafeHouse, Storage, "
+                "and try again.")
+    if (name in ("URLError", "gaierror", "ConnectTimeout", "ConnectTimeoutError", "NewConnectionError", "MaxRetryError")
+            or (name == "ConnectionError" and type(e).__module__.startswith("requests"))
+            or "getaddrinfo failed" in text or "Failed to establish a new connection" in text):
+        return "UnderCover couldn't reach the internet. Check the connection and try again."
     if isinstance(e, FileNotFoundError):
         return f"A file is missing: {Path(getattr(e, 'filename', '') or text).name}. If you deleted something from the output folder, run the cover again."
     if isinstance(e, PermissionError):
@@ -196,15 +204,26 @@ def phone_of_request() -> str | None:
     return dev.get("id") if isinstance(dev, dict) else None
 
 
-def _phone_cap(device_id: str):
+_CAP_LOCK = threading.Lock()
+_MADE: dict = {}   # id -> a phone's job made but not in JOBS yet (counted from the moment it's made; see _Jobs)
+MADE_S = 60.0      # a job made and never put in JOBS (its route failed after) stops counting after this
+
+
+def _phone_cap(job: "Job"):
     """Every phone is on the internet now, so a stolen token is worth more: one phone may have PHONE_JOBS jobs waiting or
-    running at once, and start PHONE_JOBS_HOUR in an hour. The PC has no cap."""
+    running at once, and start PHONE_JOBS_HOUR in an hour. The PC has no cap. Counted and reserved under one lock, so
+    requests from one phone at the same moment can't all pass the count before their jobs reach JOBS."""
     now = time.time()
-    mine = [j for j in list(JOBS.values()) if getattr(j, "device", None) == device_id and j.kind not in UNCAPPED]
-    if sum(not j.finished for j in mine) >= PHONE_JOBS:
-        raise TooManyJobs(f"This phone has {PHONE_JOBS} jobs waiting or running already. Wait for one to finish, or start it on the PC.")
-    if sum(now - j.created < 3600 for j in mine) >= PHONE_JOBS_HOUR:
-        raise TooManyJobs(f"This phone has started {PHONE_JOBS_HOUR} jobs in the last hour. Wait a while, or start it on the PC.")
+    with _CAP_LOCK:
+        for k in [k for k, j in _MADE.items() if now - j.created > MADE_S]:
+            _MADE.pop(k)
+        every = {**_MADE, **dict(JOBS)}
+        mine = [j for j in every.values() if getattr(j, "device", None) == job.device and j.kind not in UNCAPPED]
+        if sum(not j.finished for j in mine) >= PHONE_JOBS:
+            raise TooManyJobs(f"This phone has {PHONE_JOBS} jobs waiting or running already. Wait for one to finish, or start it on the PC.")
+        if sum(now - j.created < 3600 for j in mine) >= PHONE_JOBS_HOUR:
+            raise TooManyJobs(f"This phone has started {PHONE_JOBS_HOUR} jobs in the last hour. Wait a while, or start it on the PC.")
+        _MADE[job.id] = job
 
 
 def eta_words(seconds: float) -> str:
@@ -233,19 +252,20 @@ class Job:
         self.kind = kind
         self.origin = getattr(ORIGIN, "h", None)   # which request made it (not serialised; only compared)
         self.device = phone_of_request()   # the phone that asked for it (None: the PC)
+        self.created = time.time()
+        self.state = "queued"     # (before the count: another phone request's count reads this one from then on)
         if self.device and kind not in UNCAPPED:
-            _phone_cap(self.device)
+            _phone_cap(self)
         self.title = title        # what the page's job list calls it ("Hello · obama-uc"); None: the kind's label
-        self.state = "queued"
         self.events: list[dict] = []
         self.cond = threading.Condition()
         self.cancel = False
         self.result = None
         self.pausing = False      # Pause at the top of the page: stop cleanly, then resume later
         self.resume_spec = None   # how to start this work again (worklist.resume)
+        self.project = None       # the training project it writes under (cache/training/<name>), once it knows
         self.control = None       # trainer Control, for jobs that train
         self.retry_req = None     # (route, body) that started it: Retry on a failed one (app/server.py, phase 10)
-        self.created = time.time()
         self.ended = None
         self.started = None       # when it started running (time left is measured from here)
         self.stage_secs: dict = {}   # finished stages -> seconds (learned for the next estimate)
@@ -367,7 +387,7 @@ class Job:
         ref = evs[-2] if last.get("final") and len(evs) > 1 else last   # a finished job: how far it got
         stage = ref.get("stage")
         snap = {"id": self.id, "kind": self.kind, "state": self.state, "title": self.title or (self.resume_spec or {}).get("label"),
-                "project": (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
+                "project": self.project or (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
                 "ended": round(self.ended, 1) if self.ended else None, "pausing": self.pausing, "stage": stage,
                 "retry": self.state == "error" and self.retry_req is not None,
                 "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs),
@@ -409,7 +429,19 @@ class Job:
         return snap
 
 
-JOBS: dict[str, Job] = {}
+class _Jobs(dict):
+    """JOBS: every job by id. A phone's job is counted from the moment it's made (_MADE) until it's here."""
+
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        _MADE.pop(k, None)
+
+    def update(self, *a, **kw):
+        for k, v in dict(*a, **kw).items():
+            self[k] = v
+
+
+JOBS: dict[str, Job] = _Jobs()
 GPU_QUEUE: "queue.Queue[tuple[Job, callable]]" = queue.Queue()
 START_GATES: list = []   # gate(job): called before a queued GPU job starts and may wait (the game pause asks first)
 CURRENT: list = [None]   # the job the GPU worker is running now (the game pause asks only about real GPU work)
@@ -486,38 +518,54 @@ def gpu_worker():
             STATUS["models"] = "ready"
     except Exception as e:  # warm-up failure shouldn't kill the server; the job will report it
         STATUS["models"] = "error: " + friendly(e, "loading models")
+    deferred: set = set()
     while True:
-        job, fn = GPU_QUEUE.get()
+        _take_one(deferred)
+
+
+DEFER_REST_S = 2.0   # the GPU worker's rest once every queued job has been looked at and none fits Low profile's cap
+
+
+def _take_one(deferred: set):
+    """The GPU worker's one turn: the next queued job runs, or (it doesn't fit Low profile's cap) goes to the back of
+    the queue. deferred: the ids put back since a job last ran; once every queued job is among them, the worker rests
+    DEFER_REST_S before looking again (two or more waiting jobs once went round a million times in 2 s, each look
+    enumerating processes and reading files: the maintainers' notes, bug hunt 2026-11-08)."""
+    job, fn = GPU_QUEUE.get()
+    try:
+        for gate in START_GATES:
+            gate(job)
+        CURRENT[0] = job
+        from . import gpu as G, lowprofile
+        go = lowprofile.before_job(job)   # (Low profile: freed, the whole limit for a training, a fit check)
+        if go is None:   # doesn't fit the cap (said): to the back of the queue, the jobs behind it run; looked at again
+            CURRENT[0] = None
+            deferred.add(job.id)
+            GPU_QUEUE.put((job, fn))
+            if len(deferred) >= GPU_QUEUE.qsize():   # (a whole pass and nothing fits: no spinning)
+                deferred.clear()
+                time.sleep(DEFER_REST_S)
+            return
+        deferred.clear()   # (something runs or ends: what fits may change, the waiting jobs are looked at afresh)
+        if go is False:
+            job.finish("cancelled", message="Cancelled.")
+            CURRENT[0] = None
+            return
+        G.reset_peak()
+        job.gpu_start_gb = (G.alloc_gb() or (None,))[0]   # what was already held when it started (models from before)
         try:
-            for gate in START_GATES:
-                gate(job)
-            CURRENT[0] = job
-            from . import gpu as G, lowprofile
-            go = lowprofile.before_job(job)   # (Low profile: freed, the whole limit for a training, a fit check)
-            if go is None:   # doesn't fit the cap (said): to the back of the queue, the jobs behind it run; looked at again
-                CURRENT[0] = None
-                GPU_QUEUE.put((job, fn))
-                if GPU_QUEUE.qsize() <= 1:
-                    time.sleep(2)   # (nothing else to run: no spinning)
-                continue
-            if go is False:
-                job.finish("cancelled", message="Cancelled.")
-                CURRENT[0] = None
-                continue
-            G.reset_peak()
-            job.gpu_start_gb = (G.alloc_gb() or (None,))[0]   # what was already held when it started (models from before)
-            try:
-                run_job(job, fn)
-            finally:
-                CURRENT[0] = None
-                job.gpu_peak_gb = G.peak_gb()   # the most graphics memory this job held (Low profile's measure)
-                job.gpu_alloc_gb = (G.alloc_gb() or (None, None))[1]   # of it, the most in tensors (the rest is cache)
-                lowprofile.after_job(job)
-        except BaseException as e:   # never let the only GPU thread die: later jobs would wait forever
-            try:
-                job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).", plain=False)
-            except Exception:
-                pass
+            run_job(job, fn)
+        finally:
+            CURRENT[0] = None
+            job.gpu_peak_gb = G.peak_gb()   # the most graphics memory this job held (Low profile's measure)
+            job.gpu_alloc_gb = (G.alloc_gb() or (None, None))[1]   # of it, the most in tensors (the rest is cache)
+            lowprofile.after_job(job)
+    except BaseException as e:   # never let the only GPU thread die: later jobs would wait forever
+        deferred.discard(job.id)   # (it's gone from the queue: it mustn't count toward a whole pass)
+        try:
+            job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).", plain=False)
+        except Exception:
+            pass
 
 
 def serve_between(before=None):
@@ -542,17 +590,17 @@ def run_job(job: "Job", fn):
     if STATUS.get("gpu_problem"):
         job.finish("error", message=STATUS["gpu_problem"])
         return
-    free = shutil.disk_usage(ROOT).free
-    if free < 3e9:   # separations, conversions and trainings write GBs; failing halfway leaves partial files
-        job.finish("error", message=f"Only {free / 1e9:.1f} GB free on drive {ROOT.anchor.rstrip(chr(92))}. "
+    from . import storage
+    low = storage.low_work_space()   # (separations, conversions and trainings write GBs where the working files,
+    if low:                          # covers and voices are: failing halfway leaves partial files)
+        job.finish("error", message=f"Only {low[1] / 1e9:.1f} GB free on drive {low[0]}. "
                                     "Free some space (Library → Clean up) and try again.")
         return
     if job.cancel:
         job.finish("cancelled", message="Cancelled.")
         return
-    from . import storage
     if storage.MOVING:   # SafeHouse is moving UnderCover's files: nothing may read or write them meanwhile
-        job.finish("error", message="UnderCover's files are being moved (SafeHouse → Storage). Try again when that's done.")
+        job.finish("error", message=storage.MOVING_WHY)
         return
     from . import worklist
     if job.kind in worklist.PAUSABLE and job.kind not in worklist.PARTLY_PAUSABLE and (job.pausing or worklist.held()):

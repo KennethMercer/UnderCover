@@ -99,6 +99,7 @@ def wait_for(key):
     return False
 
 
+sock = next((a.split("=", 1)[1] for a in sys.argv[2:] if a.startswith("--socket=")), None)
 mode, args = sys.argv[1], [a for a in sys.argv[2:] if not a.startswith("--socket=")]
 if mode == "set":   # a check moves the story along: python fake_tailscale.py set '{"signed_in": true}'
     update(**json.loads(args[0]))
@@ -108,14 +109,15 @@ if mode == "daemon":
     if not _lock_byte(fd):
         sys.exit("another fake daemon is running")
     log(["tailscaled", *args])
+    update(socket=sock)   # (the CLI reaches this daemon only at the same socket, as the real one)
     update(daemon=True, backend=load().get("backend") or "NeedsLogin")
     while True:
         time.sleep(1)
 log(args)
 st = load()
 host = st.get("host", "uc-fakeone.tailfake.ts.net")
-if not daemon_alive():
-    sys.exit(1)
+if not daemon_alive() or (sock is not None and load().get("socket") not in (None, sock)):
+    sys.exit(1)   # (no daemon, or not at that socket)
 if args[:2] == ["status", "--json"]:
     out = {"BackendState": st.get("backend", "NeedsLogin"), "Self": {"DNSName": host + "." if st.get("backend") == "Running" else ""}}
     if st.get("backend") == "NeedsLogin" and st.get("up_called"):
