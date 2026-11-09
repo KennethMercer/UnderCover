@@ -776,7 +776,7 @@ def rename_speech(sid: str, name: str) -> dict:
                     held = old
                     fsutil.retry(lambda old=old, new=new: old.rename(new))
                     done.append((k, old, new))
-        except OSError:   # (one file held open, a download of it: the speech and its files stay together, as they were)
+        except OSError as e:   # (one file held open, a download of it: the speech and its files stay together, as they were)
             stuck = False
             for k, old, new in reversed(done):
                 try:
@@ -785,8 +785,11 @@ def rename_speech(sid: str, name: str) -> dict:
                     m[k], stuck = new.name, True
             if stuck:
                 fsutil.write_text(f, json.dumps(m, indent=1))
-            raise SpeakError(f"\"{held.name}\" is open somewhere (a download or a player?), so the speech "
-                             "keeps its name. Try again in a moment.")
+            if isinstance(e, PermissionError):
+                raise SpeakError(f"\"{held.name}\" is open somewhere (a download or a player?), so the speech "
+                                 "keeps its name. Try again in a moment.")
+            raise SpeakError(f"\"{held.name}\" couldn't be renamed ({e.strerror or type(e).__name__}), so the speech "
+                             "keeps its name.")
         m["file"] = name + Path(m["file"]).suffix
         if m.get("mp3"):
             m["mp3"] = name + ".mp3"

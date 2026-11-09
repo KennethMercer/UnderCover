@@ -11,6 +11,7 @@ import json
 import re
 
 PAUSE_S, PAUSE_MAX_S = 0.8, 5.0   # [pause] alone; [pause 2s] up to the bound
+BARE_MAX = 60.0                   # [pause 2] is seconds; a bare number this big ([pause 500]) is named, not guessed
 GAIN_DB = 4.0                     # [louder] / [softer]: one step, no stacking past it
 PITCH_ST = 2.0                    # [higher] / [lower]: the same
 OURS = {"pause", "louder", "softer", "higher", "lower"}
@@ -89,10 +90,10 @@ def directions(sents: list, known: frozenset = frozenset()) -> tuple[list, list,
                     unknown.append(f"[{low}]")
                 continue
             per = _UNITS.get((m.group(3) or "s").lower())
-            if secs and per is None:   # a number we don't read as a length ([pause 2 minutes]): a pause named, else text
-                if name != "pause":
-                    cur.append(m.group(0))
-                elif (t := " ".join(m.group(0).lower().split())) not in unknown:
+            # a number we don't read as a length ([pause 2 minutes], [louder 2x], or [pause 500] with no unit: surely
+            # not seconds): read as nothing and named, as an unknown tag is
+            if secs and (per is None or (not m.group(3) and float(secs) >= BARE_MAX)):
+                if (t := " ".join(m.group(0).lower().split())) not in unknown:
                     unknown.append(t)
                 continue
             if name == "pause":

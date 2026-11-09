@@ -7478,7 +7478,12 @@ def u_split_tags():
             if word == "pause" or word == "seconds":
                 assert sum(1 for p in ps if p.get("hold")) == 1, (tag, at, ps)
             n += 1
-    return f"{n} cuts across a tag, none inside it"
+    # a long bracketed aside (or a stray "[" closed far later) is cut as text: no piece runs past the limits
+    for text in ("Intro " + "[" + " ".join(f"note{i}" for i in range(120)) + "] end.",
+                 "A stray [ bracket " + " ".join(f"word{i}" for i in range(150)) + " closed ] late."):
+        pieces = tts._split_long(text)
+        assert len(pieces) > 2 and all(p and len(p) <= tts.MAX_CHARS and len(p.split()) <= tts.MAX_WORDS for p in pieces), pieces
+    return f"{n} cuts across a tag, none inside it; a long aside still cut"
 
 
 @check("bugs-da 4: a speech renamed while one of its files is held open keeps its name and its files together (the first move is put back); if even that can't be, its record follows the file, so it still lists")
@@ -7494,13 +7499,13 @@ def u_rename_held():
                                                    "created": "2026-11-08 10:00:00", "finished": 1.0}), encoding="utf-8")
         real = fsutil.retry
 
-        def held(*fail):   # a retry that gives up on the calls numbered in `fail` (as after ~3 s of a held file)
-            n = [0]
+        def held(*fail, error=PermissionError):   # a retry that gives up on the calls numbered in `fail` (as after
+            n = [0]                                # ~3 s of a held file)
 
             def retry(fn, tries=30):
                 n[0] += 1
                 if n[0] in fail:
-                    raise PermissionError("held open")
+                    raise error(17, "held open")
                 return fn()
             return retry
         try:
@@ -7522,6 +7527,13 @@ def u_rename_held():
             assert got["file"] == "New name.flac" and got["mp3"] == "Old one.mp3" and [x["id"] for x in speak.list_speech()] == [sid], got
             fsutil.retry = real
             assert speak.rename_speech(sid, "Fine")["file"] == "Fine.flac" and (d / "Fine.mp3").exists()
+            fsutil.retry = held(2, error=FileExistsError)   # another failure: put back too, and not said as a held file
+            try:
+                speak.rename_speech(sid, "Other")
+                raise AssertionError("a failed rename said it worked")
+            except speak.SpeakError as e:
+                assert "couldn't be renamed" in str(e) and "open somewhere" not in str(e), e
+            assert speak.get_speech(sid)["file"] == "Fine.flac" and (d / "Fine.flac").exists() and (d / "Fine.mp3").exists()
         finally:
             fsutil.retry = real
     return "held MP3: the FLAC put back, the speech lists; can't put back: the record follows"
@@ -7537,8 +7549,9 @@ def u_pause_forms():
         assert [p["text"] for p in ps] == ["Wait", "for it."] and ps[0]["hold"] == secs and unk == [], (tag, ps, unk)
     ps, unk = d("The first part is done. [pause 1.5 s.] Now the second part starts.")   # (a stop in the tag ends no sentence)
     assert [p["text"] for p in ps] == ["The first part is done.", "Now the second part starts."] and ps[0]["hold"] == 1.5, ps
-    ps, unk = d("Hold [pause 2 minutes] on.")
-    assert [p["text"] for p in ps] == ["Hold on."] and unk == ["[pause 2 minutes]"], (ps, unk)
+    for tag in ("[pause 2 minutes]", "[pause 500]", "[louder 2x]"):   # never read out, never guessed: named
+        ps, unk = d(f"Hold {tag} on.")
+        assert [p["text"] for p in ps] == ["Hold on."] and unk == [tag] and "hold" not in ps[0] and "gain_db" not in ps[0], (tag, ps, unk)
     ps, unk = d("See [John 3] and [Fig 2] here.")   # a name and a number: still text
     assert ps[0]["text"] == "See [John 3] and [Fig 2] here." and unk == [], (ps, unk)
     return "2, 500ms, 1.5 s., milliseconds, capitals: pauses; 2 minutes named"
@@ -7589,6 +7602,7 @@ def u_crash_no_resume():
 
 @check("bugs-da 7: two trainings started at the same moment (two quick POSTs, the form and Do it all): exactly one starts, the other is told one voice trains at a time, and the one running is the one Pause and Stop reach")
 def u_start_race():
+    import inspect
     import threading
     import types
     from undercover.core import jobs
@@ -7603,6 +7617,9 @@ def u_start_race():
             time.sleep(0.3)
             return saved[0](proj, name)
         DA.check_voice_name = slow_check
+        from undercover.doubleagent import service   # (the queue's runs take the same step)
+        for fn in (service.train_new_voice, service.run_project):
+            assert "with train_api._STARTING:" in inspect.getsource(fn), fn.__name__
         try:
             for first, second in ((DA.start_train, DA.start_train), (DA.start_auto, DA.start_train)):
                 go, got = threading.Barrier(2), []
@@ -7671,14 +7688,17 @@ def u_history_cut():
         tdir = proj.dir / "train"
         tdir.mkdir(parents=True, exist_ok=True)
         lines = [json.dumps({"epoch": 1, "secs": 2.0, "val": 0.5, "mel": 30.0}),
-                 json.dumps({"epoch": 2, "secs": 2.0, "val": float("nan"), "mel": 29.0}),
+                 json.dumps({"epoch": 2, "secs": 2.0, "val": float("nan"), "mel": float("inf")}),
                  '{"epoch": 3, "secs": 2.0, "va']
         (tdir / "history.jsonl").write_text("\n".join(lines), encoding="utf-8")
         hist = trainer.read_history(tdir / "history.jsonl")
         assert [h["epoch"] for h in hist] == [1, 2], hist
+        proj.train["saves"] = [{"epoch": 2, "val": float("nan")}]   # (a diverged training's save, and its losses)
+        proj.save()
         page = DA.project_json(P.Project.load(proj.name))
         json.dumps(page, allow_nan=False)   # (what a browser can parse)
-        assert [h["val"] for h in page["history"]] == [0.5, None], page["history"]
+        assert [(h["val"], h["mel"]) for h in page["history"]] == [(0.5, 30.0), (None, None)], page["history"]
+        assert page["saves"][0]["val"] is None, page["saves"]
         assert trainer.read_history(tdir / "nothing.jsonl") == []
     src = inspect.getsource(trainer.Trainer.run)
     assert 'fsutil.write_text(self.tdir / "history.jsonl"' in src and "hf.write_text(" not in src
@@ -7719,7 +7739,7 @@ def u_not_english():
     src = inspect.getsource(speak.make_speech) + inspect.getsource(speak._save)
     assert '"not_english": tags.not_english(raw)' in src and '"not_english": int(p.get("not_english") or 0)' in src
     js = (ROOT / "undercover" / "web" / "speakeasy.js").read_text(encoding="utf-8")
-    assert "ev.result.not_english" in js and "not in English" in js
+    assert "ev.result.not_english" in js and "isn't in English" in js
     return "2 of 4 paragraphs counted; said under the result"
 
 

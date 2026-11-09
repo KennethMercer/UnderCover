@@ -282,7 +282,7 @@ function seStart(job, plan, estimate, resumed = false) {
         $("#se-progress").innerHTML = `${SE.sents.length} sentence${SE.sents.length === 1 ? "" : "s"}<span data-deep> · made in ${(ev.result.seconds?.total || 0).toFixed(1)} s</span>`
           + (unk.length ? ` · <span class="se-unknown">I didn't know ${esc(unk.join(", "))}, so I left ${unk.length === 1 ? "it" : "them"} out.</span>` : "")
           + (held.length ? ` · <span class="se-unknown">${esc(held.join(", "))} ${held.length === 1 ? "isn't" : "aren't"} used yet, so I left ${held.length === 1 ? "it" : "them"} out.</span>` : "")
-          + (foreign ? ` · <span class="se-unknown">I skipped ${foreign} sentence${foreign === 1 ? "" : "s"} not in English (SpeakEasy reads English only).</span>` : "");
+          + (foreign ? ` · <span class="se-unknown">I left out the text that isn't in English (SpeakEasy reads English only).</span>` : "");
         $("#se-wav").href = ev.result.url + "?download"; $("#se-wav").removeAttribute("aria-disabled");
         $("#se-wav").textContent = `Download ${(ev.result.file || "").split(".").pop().toUpperCase() || "FLAC"}`;   // phase 24: lossless FLAC
         if (ev.result.mp3_url) { $("#se-mp3").href = ev.result.mp3_url + "?download"; $("#se-mp3").removeAttribute("aria-disabled"); }

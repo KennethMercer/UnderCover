@@ -63,21 +63,25 @@ def _busy(name: str) -> dict | None:
 def project_json(proj: P.Project) -> dict:
     tdir = proj.dir / "train"
     from .trainer import read_history
-    finite = lambda x: x if x - x == 0 else None   # (a NaN or infinite loss isn't JSON the page can read)
-    hist = [{**h, "val": finite(h["val"])} for h in read_history(tdir / "history.jsonl")]
+    # (a NaN or infinite loss, a diverged training's, isn't JSON the page can read: it goes as nothing)
+    finite = lambda d: {k: None if isinstance(v, float) and v - v != 0 else v for k, v in d.items()}
+    hist = [finite(h) for h in read_history(tdir / "history.jsonl")]
     saves = []
     for s in proj.train.get("saves", []):
         pv = tdir / "previews" / f"e{s['epoch']}.wav"
-        saves.append({**s, "preview": files.file_url(pv) if pv.exists() else None,
+        saves.append({**finite(s), "preview": files.file_url(pv) if pv.exists() else None,
                       "available": (tdir / f"e{s['epoch']}.pth").exists()})
     real = tdir / "previews" / "real.wav"
     a = _busy(proj.name)
     from ..core import worklist
     queued = worklist.queued_for("project", proj.name)   # "Queued for tonight" on the Deep path
     trains = {p.id for p in proj.training_phrases()}
+    summary = proj.summary()
+    if summary["train"].get("saves"):
+        summary["train"] = {**summary["train"], "saves": [finite(s) for s in summary["train"]["saves"]]}
     return {
         "queued": queued,
-        **proj.summary(),
+        **summary,
         "sources": [{**s.to_json(), "raw": files.file_url(proj.dir / "raw" / f"{s.id}.wav")} for s in proj.sources],
         # kept = what trains (rc-fix, RC pass C): a phrase of an unticked source is listed as left out, with why,
         # unless the user ticked it by hand; Step by step's Kept filter and its minutes then agree with kept_minutes

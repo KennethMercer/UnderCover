@@ -1132,7 +1132,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
     from . import sources as srcmod
     from ..core.speaker import SpeakerEmbedder
     from .trainer import FRESH_KEYS, Trainer, epoch_line, export_voice
-    TC ={**CONFIG["training"], **({"target_minutes": target_minutes} if target_minutes else {})}
+    TC = {**CONFIG["training"], **({"target_minutes": target_minutes} if target_minutes else {})}
     key = slug(person)
     if project:
         proj = P.Project.load(project)
@@ -1141,12 +1141,13 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         proj = _project_named(person) or P.Project.create(person, "speaking")
     else:
         proj = project_for(person, mode, subject)
-    busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
-                 and (n == proj.name or a["kind"] in ("train", "auto"))), None)
-    if busy:
-        raise ModelError(f"'{busy}' is being prepared or trained right now. One voice trains at a time; "
-                         "try again when it's done (or pause it).")
-    train_api.ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
+    with train_api._STARTING:   # (the check and the entry as one step, as the training form's)
+        busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
+                     and (n == proj.name or a["kind"] in ("train", "auto"))), None)
+        if busy:
+            raise ModelError(f"'{busy}' is being prepared or trained right now. One voice trains at a time; "
+                             "try again when it's done (or pause it).")
+        train_api.ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
     try:
         proj = apply_mode(proj, person, mode)   # once the project is ours (a reused one too: the queue's)
         if not proj.sources:
@@ -1357,13 +1358,14 @@ def run_project(job, name: str, control, push) -> str:
     from ..core.speaker import SpeakerEmbedder
     from .trainer import FRESH_KEYS, LENGTHS, Trainer, epoch_line, export_voice
     proj = P.Project.load(name)
-    busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
-                 and (n == proj.name or a["kind"] in ("train", "auto"))), None)
-    if busy:
-        raise ModelError(f"'{busy}' is being prepared or trained right now. One voice trains at a time.")
-    vname = slug(proj.train.get("voice_name") or f"{proj.name}-uc")
-    train_api.check_voice_name(proj, vname)   # before any work: never another person's voice
-    train_api.ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
+    with train_api._STARTING:   # (the check and the entry as one step, as the training form's)
+        busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
+                     and (n == proj.name or a["kind"] in ("train", "auto"))), None)
+        if busy:
+            raise ModelError(f"'{busy}' is being prepared or trained right now. One voice trains at a time.")
+        vname = slug(proj.train.get("voice_name") or f"{proj.name}-uc")
+        train_api.check_voice_name(proj, vname)   # before any work: never another person's voice
+        train_api.ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
     try:
         todo = [s.id for s in proj.sources if s.selected and s.status not in ("ready", "failed")]
         if todo:

@@ -466,7 +466,7 @@ function renderListen() {
   $("#tr-checks").innerHTML = `<div class="ckpt"><div class="row spread"><b>Real voice</b><span class="tag">original</span></div>
       <div class="row">${playBtn(p.real_preview, "Play the real voice")}<span class="meta">held out from training</span></div></div>`
     + saves.slice().reverse().map(s => `<div class="ckpt${s.epoch === st.best ? " best" : ""}">
-      <div class="row spread"><b>Epoch ${s.epoch}</b><span class="tag${s.epoch === st.best ? " ok" : ""}">${s.epoch === st.best ? "best · " : ""}${s.val.toFixed(3)}</span></div>
+      <div class="row spread"><b>Epoch ${s.epoch}</b><span class="tag${s.epoch === st.best ? " ok" : ""}">${s.epoch === st.best ? "best · " : ""}${s.val == null ? "–" : s.val.toFixed(3)}</span></div>
       <div class="row">${playBtn(s.preview, `Play epoch ${s.epoch}`)}${busy ? "" : `<button class="linkbtn" data-export="${s.epoch}">${st.waiting && st.waiting.epoch === s.epoch ? `Waiting beside ${esc(voiceDisplay(st.waiting.voice))}` : st.exported_epoch === s.epoch ? "Added ✓" : "Use this one"}</button>`}</div></div>`).join("");
   $$("[data-export]").forEach(b => b.onclick = () => exportVoice(+b.dataset.export));
 }
