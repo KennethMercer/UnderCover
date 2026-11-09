@@ -296,6 +296,18 @@ pause. Every progress event carries `total_left` in seconds (`jobs.STAGES`, `cac
 (`logs/heartbeat*.jsonl`) records each running job's resume spec for the Doctor; `jobs.START_GATES` lets the game pause
 ask before a queued GPU job starts.
 
+A restart or quit (`POST /api/restart`, `/api/quit`) never ends work that Pause doesn't set aside (`server._unfinished_work`:
+every unfinished job but the pausable voice work, the speech engine's warm-up and a voice's preview line). It answers 409
+with what's running; a restart's 409 offers `now_ok` ("Restart now" stops it), except for a Storage move, an add-on, Make
+smaller or the yt-dlp update, which can't stop halfway and are waited for. A restart with voice work pauses it first
+(resumed by the next process: `worklist.RESTARTING` keeps this one's loop from resuming it), then waits for work started
+meanwhile, and is called off (the voice work resumes) if that hasn't finished in 10 minutes. A setting changed from the page
+never asks for a restart: `/api/status.stale` follows the code and its shipped defaults, not the user's `config.toml`.
+Every GPU job refuses to start with under 3 GB free on any drive holding the working files, covers or voices
+(`storage.work_space`, the drive named); the Doctor's free-space check and the Library's free line use the same list.
+While a Storage move runs, GPU jobs refuse, and uploads and installs (songs, voices, training recordings, themes) answer
+409; a move doesn't start while one is under way (`storage.start_writing`).
+
 ### Overnight queue
 
 `core/worklist.py` runs items one after another when the GPU is free, from a start time if set, and only items whose
@@ -548,8 +560,10 @@ redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passe
   refused. Later edits paint over earlier ones.
 - **`check_edit` is the one gate**, and it answers before any GPU: every field, the stretch resolved, its edges snapped, and the plan it
   leaves through `check_plan`. A word index counts only against `words_hash`. An edge goes to the nearest silence (the backing's
-  own, for the backing), or for the lead to a dip when there's no silence within 2 s, and the edit says what it moved past. With no place
-  to land it's refused, naming the word.
+  own, for the backing; the quiet before the first line and after the last count), or for the lead to a dip when there's no silence
+  within 2 s, and an end never lands at or before its start. The edit says which word it took in or left out. With no place
+  to land it's refused, naming the word. The list reads the stems through the cover's lead gate, chorus stretches included under
+  every chorus mode, so an edit sings what the cover sang.
 - **An octave edit is priced before it's sung** (`edits.price`): `fit.pick_fit` at the cover's key on the stretch's notes, at the
   edit's octave against the singer's own. When the cost rises by `POOR_COST` (0.25) or more, the answer says it's a poor fit and
   why (the share of notes out of the voice's range, or how far from where it's comfortable). It's said, never refused. The pitch
@@ -707,12 +721,15 @@ runs at import, at save and every time a library theme is served; import and exp
 
 Off until the person sets it up. Since 1.2.1 there is one way in for every phone, at home and away: an HTTPS link,
 `https://<name>.ts.net`, from a hidden userspace Tailscale (`core/tailnet.py`: pinned MSI, hashes checked, no driver,
-no service) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
+no service; its CLI pipe is named after its state folder and a random key kept there, `platform.tailscale_socket`, so
+two copies on one PC never share a daemon; one this folder left running is ended at the next start) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
 never the PC's own listener. Windows-only for now (`platform.supports("away")`). Set up, on the PC, is the switch: it
 fetches the piece, then waits for Tailscale's sign-in and its one approval (`/api/phone`'s `phase`, with the two links,
 which never reach a phone). Turn off the phone link resets Funnel and stops the daemon, so nothing reaches the PC from a
 phone. Private (Deep Cover, `phone.away_private`): Serve instead of Funnel, to the same listener and name, so only
-devices on the person's tailnet reach it. Switching resets the serve config first, so the two are never on together.
+devices on the person's tailnet reach it. Switching resets the serve config first, so the two are never on together, and a publish
+chosen before the switch doesn't run (`_run_bg` checks the mode again). The daemon's log is set aside past 5 MB at a
+start (`tailscaled.old.log`).
 
 Connecting a phone: the card shows a QR code of `https://<name>/pair#<code>`, a 128-bit code in the fragment (never
 sent to a server, taken out of the address bar at once), for five minutes. Wrong claims are counted for the card but
@@ -721,20 +738,24 @@ can't end it. A six-character typed code exists only when the person asks for it
 the phone collects once with its nonce (`/api/phone/wait`); wrong, used, expired and refused nonces all get the same
 answer as "not yet". No forgets the device; a pending one is forgotten after ten minutes. The token is one cookie,
 `__Host-uc`: Secure, HttpOnly, SameSite=Strict, Path=/, no Domain, 30 days from its last use (`phone.TOKEN_IDLE_S`),
-stored on the PC as its SHA-256 and compared in constant time. Remove ends it at the phone's next request and closes
+stored on the PC as its SHA-256 and compared in constant time. A phone none of whose tokens has been used for 30
+days is let go (`phone._quiet`, on every read: off the card, out of the count, logged), and pairs again. Remove ends it at the phone's next request and closes
 its open job stream; that 401 carries `Clear-Site-Data: "cache", "storage"`. `/api/phone` and everything under it but
 the claim, the wait and the move are the PC's.
 
 At the link every request comes from outside (`Handler._gate_away`): the link's own name in Host, a same-origin Origin
 on anything but GET, the token for everything but the open routes, and before a token only the generic
-`Unauthorized` / `Forbidden`, so nothing says what exists. `app/phone_api.ROUTES` is the one table of every route and
+`Unauthorized` / `Forbidden`, so nothing says what exists. Before a token a request has `Handler.OPEN_S` (60 s) from its
+first byte, and the open routes take 4 KB (`JSON_MAX_FOR`). `app/phone_api.ROUTES` is the one table of every route and
 its policy (open / phone / pc). Each phone may have three jobs waiting or running and start twelve in an hour
-(`jobs.PHONE_JOBS`, 429 past it), and keep three items in tonight's queue (`worklist.PHONE_ITEMS`); the PC has no cap, and UnderCover's own warm-up and preview jobs aren't counted. Forgetting every thumb at once is the PC's. Deletes that nothing brings back (covers, speech, songs, training
+(`jobs.PHONE_JOBS`, 429 past it), and keep three items in tonight's queue (`worklist.PHONE_ITEMS`); the PC has no cap, and UnderCover's own warm-up and preview jobs aren't counted. A job counts from the moment it's
+made (`jobs._MADE` until it's in `JOBS`), under one lock, and a voice's preview waits once (`voicepreview.queue_job`:
+asked again before it starts, the waiting one makes the newest line). Allow counts the phones already connected too. Forgetting every thumb at once is the PC's. Deletes that nothing brings back (covers, speech, songs, training
 projects) are the PC's, and the pages don't offer them on a phone.
 
 Phones paired on the home Wi-Fi before 1.2.1 hold a LAN token (`lan_hash`), good only from the PC's home network. For
 them alone the home-network listener stays open (`phone.lan_needed`, stored as `lan` in `phone.json`, so a restart
-opens it only then). Their page shows one line with Switch: a one-use move code bound to that phone
+opens it only then). Their page shows one line with Switch: a one-use move code bound to that phone (one live at a time)
 (`/api/phone/move/link`, which needs the LAN token), opened at the link (`/move#<code>`), waits for Allow like a new
 phone, then gets the one token. The LAN token is dropped at the new token's first use, and the listener closes for good
 when no LAN token is left. A 1.1 `phone.json` is read as this one: its away token becomes the one token, and a phone that still sends it in the 1.2 cookie (`uc_away`) at the link gets it back as `__Host-uc`, the old one cleared. Link on and

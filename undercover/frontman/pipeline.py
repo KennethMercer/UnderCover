@@ -462,7 +462,8 @@ def song_key(song: Path) -> dict:
     tonic, mode, conf = detect_key(y, sr)
     k = {"tonic": tonic, "mode": mode, "name": key_name(tonic, mode), "confidence": conf}
     cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(k), encoding="utf-8")
+    from ..core import fsutil
+    fsutil.write_text(cache, json.dumps(k))
     return k
 
 

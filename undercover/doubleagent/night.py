@@ -422,6 +422,8 @@ def _improve(job, item) -> dict:
     push, control = worklist.pusher(job), worklist.control_for(job)
     old = get_voice(item["target"])
     proj = _project_for_item(item, create=True)
+    if proj is not None:
+        job.project = proj.name   # (said in the job list: what it writes under cache/training)
     if proj is None:
         raise ModelError(f"Couldn't find or create a training project for {item['target']}.")
     cand = f"{old.name}-next"
@@ -639,6 +641,7 @@ def _project(job, item) -> dict:
     from . import service
     from . import voicecheck
     from ..core.speaker import SpeakerEmbedder
+    job.project = item["target"]   # (said in the job list: the project it trains)
     name = service.run_project(job, item["target"], worklist.control_for(job), worklist.pusher(job))
     proj = _project_for_item(item, create=False)
     score = None
