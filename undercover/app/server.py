@@ -1079,6 +1079,13 @@ class ExclusiveServer(ThreadingHTTPServer):
         self._exclusive()
         super().server_bind()
 
+    def handle_error(self, request, client_address):
+        """A client that went away mid-request (a closed tab, a phone that lost its signal, a kept-alive connection the
+        browser let go) isn't a problem: nothing in the log. Anything else: Python's traceback, as before."""
+        if isinstance(sys.exc_info()[1], (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
 
 class PhoneServer(ExclusiveServer):
     """The second listener, on the home-network address, only while a phone paired there before the link still holds

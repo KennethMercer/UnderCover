@@ -65,6 +65,9 @@ in brackets.
 - In Deep Cover, away from home can be private: only devices signed in to your Tailscale reach it, with nothing on
   the public internet.
 
+**Fixes** (quietdrops)
+- The server's log keeps real problems only: a closed tab or a dropped connection no longer leaves an error there.
+
 **Fixes** (tidy1)
 - A file that only looks like a song (nothing in it plays) is refused with a plain message.
 
