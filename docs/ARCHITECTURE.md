@@ -560,8 +560,10 @@ redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passe
   refused. Later edits paint over earlier ones.
 - **`check_edit` is the one gate**, and it answers before any GPU: every field, the stretch resolved, its edges snapped, and the plan it
   leaves through `check_plan`. A word index counts only against `words_hash`. An edge goes to the nearest silence (the backing's
-  own, for the backing), or for the lead to a dip when there's no silence within 2 s, and the edit says what it moved past. With no place
-  to land it's refused, naming the word.
+  own, for the backing; the quiet before the first line and after the last count), or for the lead to a dip when there's no silence
+  within 2 s, and an end never lands at or before its start. The edit says which word it took in or left out. With no place
+  to land it's refused, naming the word. The list reads the stems through the cover's lead gate, chorus stretches included under
+  every chorus mode, so an edit sings what the cover sang.
 - **An octave edit is priced before it's sung** (`edits.price`): `fit.pick_fit` at the cover's key on the stretch's notes, at the
   edit's octave against the singer's own. When the cost rises by `POOR_COST` (0.25) or more, the answer says it's a poor fit and
   why (the share of notes out of the voice's range, or how far from where it's comfortable). It's said, never refused. The pitch
@@ -718,12 +720,15 @@ runs at import, at save and every time a library theme is served; import and exp
 
 Off until the person sets it up. Since 1.2.1 there is one way in for every phone, at home and away: an HTTPS link,
 `https://<name>.ts.net`, from a hidden userspace Tailscale (`core/tailnet.py`: pinned MSI, hashes checked, no driver,
-no service) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
+no service; its CLI pipe is named after its state folder and a random key kept there, `platform.tailscale_socket`, so
+two copies on one PC never share a daemon; one this folder left running is ended at the next start) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
 never the PC's own listener. Windows-only for now (`platform.supports("away")`). Set up, on the PC, is the switch: it
 fetches the piece, then waits for Tailscale's sign-in and its one approval (`/api/phone`'s `phase`, with the two links,
 which never reach a phone). Turn off the phone link resets Funnel and stops the daemon, so nothing reaches the PC from a
 phone. Private (Deep Cover, `phone.away_private`): Serve instead of Funnel, to the same listener and name, so only
-devices on the person's tailnet reach it. Switching resets the serve config first, so the two are never on together.
+devices on the person's tailnet reach it. Switching resets the serve config first, so the two are never on together, and a publish
+chosen before the switch doesn't run (`_run_bg` checks the mode again). The daemon's log is set aside past 5 MB at a
+start (`tailscaled.old.log`).
 
 Connecting a phone: the card shows a QR code of `https://<name>/pair#<code>`, a 128-bit code in the fragment (never
 sent to a server, taken out of the address bar at once), for five minutes. Wrong claims are counted for the card but

@@ -1948,6 +1948,130 @@ def u_decode_bound():
     return "a lying FLAC judged by what's decoded (link and dropped); a 5-hour song stopped at 20 min; a source at its keep; 480p first; loudness, add_file bounded"
 
 
+@check("the hidden Tailscale's driver holds up: a publish chosen before Private was switched doesn't run (the next step chooses again); a node with no name is never ready; the CLI's output and the daemon's log stay small")
+def u_tailnet_guard():
+    import inspect, threading
+    from undercover.core import tailnet
+    saved_state, saved_cmd, saved_cli = dict(tailnet.STATE), tailnet._cmd, tailnet._cli
+    ran = []
+
+    def cmd(which):
+        ran.append(which)
+        raise OSError("not here")   # (stops the step right there; its error is kept)
+    try:
+        tailnet._cmd = cmd
+        for private, key, runs in ((True, "funnel", False), (False, "serve", False), (False, "funnel", True),
+                                   (True, "serve", True)):
+            ran.clear()
+            tailnet.STATE.update(want=True, private=private, error="")
+            tailnet._run_bg(key, [key, "--bg"])
+            for _ in range(100):
+                if not any(t.name == f"tailscale-{key}" for t in threading.enumerate()):
+                    break
+                time.sleep(0.02)
+            assert bool(ran) == runs, (private, key, ran)
+        tailnet._cli = lambda *a, **k: json.dumps({"AllowFunnel": {":443": True}, "Web": {}})
+        tailnet.STATE.update(private=False, port=7871)
+        assert tailnet._funnel_on({"Self": {"DNSName": ""}}) is False, "a node with no name was ready"
+    finally:
+        tailnet._cmd, tailnet._cli = saved_cmd, saved_cli
+        tailnet.STATE.clear()
+        tailnet.STATE.update(saved_state)
+    assert "del _P[\"out\"][:-OUT_LINES]" in inspect.getsource(tailnet._run_bg) and tailnet.OUT_LINES == 200
+    with isolated_data():
+        from undercover.core.config import path
+        logs = path("logs_dir")
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "tailscaled.log").write_text("x" * 64, encoding="utf-8")
+        was, saved_daemon = tailnet.LOG_MAX, tailnet._P["daemon"]
+        tailnet.LOG_MAX = 10
+        tailnet._cmd = lambda which: [sys.executable, "-c", "print('daemon')"]
+        try:
+            tailnet._start_daemon()
+            tailnet._P["daemon"].wait(30)
+            assert (logs / "tailscaled.old.log").read_text(encoding="utf-8") == "x" * 64
+            assert "daemon" in (logs / "tailscaled.log").read_text(encoding="utf-8")
+        finally:
+            tailnet.LOG_MAX, tailnet._cmd, tailnet._P["daemon"] = was, saved_cmd, saved_daemon
+    return "a stale publish doesn't run; no name, not ready; output and log bounded"
+
+
+@check("two hidden Tailscales side by side (an install and a sandbox, two test runs): each daemon's pipe is named after its own state folder and that folder's random key (nothing to guess), so each CLI reaches its own daemon and never the other's; a daemon this state folder left running from before is ended before a new one starts, and nobody else's")
+def u_tailnet_pipe():
+    import subprocess, tempfile
+    from types import SimpleNamespace
+    from undercover.core import platform as P
+    fake = ROOT / "tests" / "fake_tailscale.py"
+    with tempfile.TemporaryDirectory(prefix="uc-ts-pipe-") as d:   # (two fakes' own state; nothing of the user's)
+        a, b2 = Path(d) / "a" / "tailscale-state", Path(d) / "b" / "tailscale-state"
+        sa, sb = P.tailscale_socket(a), P.tailscale_socket(b2)
+        assert sa != sb and P.tailscale_socket(a) == sa, (sa, sb)
+        assert P.tailscale_socket(str(a) + os.sep) == sa, "a trailing separator named another pipe"
+        if P.WINDOWS:
+            assert sa.startswith("\\\\.\\pipe\\undercover-tailscaled-") and P.tailscale_socket(str(a).upper()) == sa, sa
+        else:
+            assert sa == str(a / "tailscaled.sock")
+        daemons = []
+        try:
+            for box, sock in ((a, sa), (b2, sb)):
+                box.mkdir(parents=True)
+                env = {**os.environ, "FAKE_TS_STATE": str(box / "fake.json")}
+                daemons.append(subprocess.Popen([sys.executable, str(fake), "daemon", f"--socket={sock}"], env=env,
+                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                creationflags=P.NO_WINDOW))
+            def cli(box, sock):
+                env = {**os.environ, "FAKE_TS_STATE": str(box / "fake.json")}
+                r = subprocess.run([sys.executable, str(fake), "cli", f"--socket={sock}", "status", "--json"], env=env,
+                                   capture_output=True, text=True, timeout=30, creationflags=P.NO_WINDOW)
+                return r.returncode
+            wait_for(lambda: cli(a, sa) == 0 and cli(b2, sb) == 0, 20, every=0.2, what="both fake daemons")
+            assert cli(a, sb) != 0 and cli(b2, sa) != 0, "a CLI reached the other copy's daemon"
+        finally:
+            for p in daemons:
+                p.kill()
+                p.wait(10)
+    assert P.tailscale_socket(a, "k1") != P.tailscale_socket(a, "k2"), "the key isn't in the name"
+    from undercover.core import tailnet
+    with isolated_data():
+        k = tailnet._pipe_key()
+        assert re.fullmatch(r"[0-9a-f]{32}", k) and tailnet._pipe_key() == k and (tailnet.state_dir() / "uc-pipe").is_file()
+        assert tailnet._socket() == P.tailscale_socket(tailnet.state_dir(), k)
+        prog = tailnet.bin_dir() / P.tailscale_names()[0]   # (the isolated models folder: an empty stand-in file)
+        prog.parent.mkdir(parents=True, exist_ok=True)
+        prog.write_bytes(b"")
+        rec = tailnet.state_dir() / "uc-daemon"
+        rec.write_text("424242 1000", encoding="utf-8")
+        killed, real_kill, real_path, real_started, saved_cmd = [], os.kill, P.process_path, P.process_started, dict(tailnet.CMD)
+        tailnet.CMD.clear()
+        try:
+            os.kill = lambda pid, sig: killed.append(pid)
+            P.process_path = lambda pid: str(prog.resolve()) if pid in (424242, 616161) else "C:\\other\\tailscaled.exe"
+            P.process_started = lambda pid: {424242: 1000, 616161: 2000}.get(pid, 3000)
+            tailnet._end_orphans()
+            assert killed == [424242], killed
+            killed.clear()
+            rec.write_text("515151 3000", encoding="utf-8")   # another program by now
+            tailnet._end_orphans()
+            assert killed == [], "a process that isn't this copy's tailscaled was ended"
+            rec.write_text("616161 1000", encoding="utf-8")   # the pid given again (our program, a later start: the install's)
+            tailnet._end_orphans()
+            assert killed == [], "a later process Windows gave the same pid was ended"
+            tailnet.CMD.update(saved_cmd or {"tailscaled": ["x"]})   # (tests' fakes: never)
+            rec.write_text("424242 1000", encoding="utf-8")
+            tailnet._end_orphans()
+            assert killed == []
+            tailnet.CMD.clear()
+            tailnet._keep_pid(SimpleNamespace(pid=424242))
+            assert rec.read_text(encoding="utf-8") == "424242 1000"
+            tailnet._drop_pid()
+            assert not rec.exists(), "a clean end kept the record"
+        finally:
+            os.kill, P.process_path, P.process_started = real_kill, real_path, real_started
+            tailnet.CMD.clear()
+            tailnet.CMD.update(saved_cmd)
+    return "one pipe per state folder and key; each CLI reaches its own daemon only; only this folder's leftover ended"
+
+
 @check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); Private (1.2) is Serve to the same listener with Funnel off, and back; exit, off and forget clean up; a wrong download is refused")
 def u_tailnet():
     import re
@@ -9028,7 +9152,81 @@ def u_edits():
     assert "edits.at_make(res.id" in src and "heard.update(words=words, rows=rows)" in src
     assert '"edits": h.get("edits") or 0' in src
     assert 'one_line=edit["part"] == "backing"' in (Path(ROOT) / "undercover" / "frontman" / "edits.py").read_text(encoding="utf-8")
-    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes"
+    # chorus "keep": the cover silenced the lead's leftovers under the lines kept in the backing, and the list sings from that lead too
+    with isolated_data():
+        from undercover.core.config import path
+        from undercover.frontman.pipeline import CoverOptions
+        g = E._gate_of({"instrument": [], "chorus": [(2.0, 6.0)]}, CoverOptions(voice="x", chorus="keep"))
+        assert g == {"instrument": [], "chorus": [[2.0, 6.0]], "mode": "keep"}, g
+        sd = path("cache_dir") / "sep"
+        sd.mkdir(parents=True, exist_ok=True)
+        st = {}
+        for k, v in (("vocals", 0.1), ("backing", 0.1), ("instrumental", 0.0), ("converted", 0.1)):
+            st[k] = sd / f"{k}.flac"
+            sf.write(str(st[k]), np.full((16000 * 10, 2), v, np.float32), 16000)
+        item = {"id": "0123456789", "song": "", "stems": {k: str(st[k]) for k in ("vocals", "backing", "instrumental")},
+                "converted_vocal": str(st["converted"]), "options": {"voice": "x", "chorus": "keep"}}
+        y, _ = sf.read(str(E._stems(None, item, {"gate": g, "cover": item["id"]}, E._options(item))["vocals"]), dtype="float32")
+        assert abs(y[16000 * 4]).max() < 1e-4 and abs(y[16000 * 8] - 0.1).max() < 1e-3, (y[16000 * 4], y[16000 * 8])
+        E._drop(list(E.folder(item["id"]).glob("gate_*")))
+        from undercover.frontman import leadgate as LG
+        real = (E.get_voice, D.heard_words, E.read_pitch, LG.plan)
+        E.get_voice, D.heard_words, E.read_pitch = (lambda v: None), (lambda *a, **k: []), (lambda *a, **k: None)
+        LG.plan = lambda lead, back=None: {"instrument": [], "chorus": [(2.0, 6.0)]}
+        try:
+            doc = E.prepare(None, item, lambda *a: None)   # the list's landing points from the lead the cover sang: a silence at 2-6 s
+        finally:
+            E.get_voice, D.heard_words, E.read_pitch, LG.plan = real
+        assert doc["gate"]["chorus"] == [[2.0, 6.0]] and any(a <= 2.1 and b >= 5.9 for a, b in doc["points"]["lead"]), doc["points"]
+        # "top" with no chorus: the cover's gate took out only the instrument, and the list follows it (no refusal)
+        top = {"instrument": [[2.0, 6.0]], "chorus": [], "mode": "top"}
+        y, _ = sf.read(str(E._stems(None, item, {"gate": top, "cover": "abcdef0123"}, E._options(item))["vocals"]), dtype="float32")
+        assert abs(y[16000 * 4]).max() < 1e-4, y[16000 * 4]
+        try:
+            E._stems(None, item, {"gate": {**top, "chorus": [[7.0, 9.0]]}, "cover": "abcdef0123"}, E._options(item))
+            raise AssertionError("followed a top chorus")
+        except ModelError:
+            pass
+    # the quiet before the first line and after the last are landing places: the song's last line can be edited by its words
+    t = np.arange(16000 * 30) / 16000
+    x = np.where(((t >= 8) & (t < 12)) | ((t >= 15) & (t < 20)), 0.3 * np.sin(2 * np.pi * 220 * t), 0.0).astype(np.float32)
+    ws = [[f" w{i}", 8 + 0.3 * i, 8.2 + 0.3 * i] for i in range(12)] + [[f" x{i}", 15 + 0.3 * i, 15.2 + 0.3 * i] for i in range(15)]
+    two = [[0.0, 13.5, "A"], [13.5, 30.0, "B"]]
+    pd = E.new_doc("0123456789", ws, [], two, two, 30.0, {"A": 0, "B": 0}, E.snap_points(x, x, ws), gate, True, True)
+    assert pd["points"]["lead"] == [[0.0, 8.0], [12.0, 15.0], [20.0, 30.0]], pd["points"]
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [12, 26], "words_hash": pd["words_hash"]}, pd)
+    assert e["t1"] > 20.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the end in the outro
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [0, 11], "words_hash": pd["words_hash"]}, pd)
+    assert 7.9 <= e["t0"] <= 8.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the first line's start in the intro's quiet
+    assert "past" not in e["moved"] and e["moved"] == "The end moved 0.5 s.", e   # an edge moved outward is past none of its own words
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "t0": 6.0, "t1": 16.5}, pd)   # an end moved in: the nearest word it left out
+    assert (e["t0"], e["t1"], e["moved"]) == (6.0, 14.98, 'The end moved past "x4".'), e
+    refused({"op": "octave", "part": "lead", "octave": 1, "words": [0, 5], "words_hash": pd["words_hash"]}, pd, 'near the end, at "w5"')   # never back past the start
+    assert E.snap_points(np.zeros(16000, np.float32), None, [])["lead"] == []   # (nothing sung: no landing places made up)
+    long_back = np.concatenate([x, 0.3 * np.sin(2 * np.pi * 220 * np.arange(16000 * 3) / 16000).astype(np.float32), np.zeros(16000, np.float32)])
+    assert max(b for a, b in E.snap_points(x, long_back, ws)["backing"]) <= 30.0   # (a backing longer than the lead: the song still ends with the lead)
+    one = {**pd, "points": {"lead": [[12.5, 13.5]], "backing": [], "dips": [11.0]}}   # one word, a dip before it and a silence after
+    refused({"op": "octave", "part": "lead", "octave": 1, "t0": 11.9, "t1": 12.3}, one, "too short")   # its start snaps past it: too short, as said
+    # a mix that fails before it mixes (the polish, a loudness read) leaves no mix_ folder in the cache
+    with isolated_data():
+        from undercover.core.config import path
+        import undercover.frontman.remix as RX
+        real_polish = RX.polish_vocal
+        RX.polish_vocal = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("the polish went"))
+        try:
+            for s in (RX.MixSettings(polish=True), RX.MixSettings(polish=False, reverb=None)):
+                try:   # (no polish: the loudness of a file that isn't there fails)
+                    RX.remix(path("cache_dir") / "no-inst.flac", path("cache_dir") / "no-vox.flac", path("cache_dir") / "no-orig.flac",
+                             path("output_dir") / "x", s=s, reverb_ref=path("cache_dir") / "no-rev.flac")
+                    raise AssertionError("mixed")
+                except AssertionError:
+                    raise
+                except Exception:   # noqa: BLE001 - any failure will do
+                    pass
+                assert not list(path("cache_dir").glob("mix_*")), list(path("cache_dir").iterdir())
+        finally:
+            RX.polish_vocal = real_polish
+    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes, a kept chorus as the cover had it, intro and outro landings"
 
 
 @check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, a repeating pre-chorus left with its verse, a change between sentences, Take turns with one singer on the verses and the other on the choruses and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
@@ -10082,6 +10280,18 @@ def u_ear():
         finally:
             fapi._start_preview = realp
         assert [(v["octave"], v["key"]) for v in pv["variants"]] == [(0, 1), (-1, 0)] and pv["voice"] == "zed-2-uc" and "voice" not in pv["variants"][1], pv
+        # a cover whose settings hold its key as a float (as a cover's settings store it): variants without a key still have labels
+        import undercover.frontman.history as _fh
+        realg = _fh.get
+        _fh.get = lambda i: {**realg(i), "options": {**realg(i)["options"], "key": 2.0, "octave": -1.0}}
+        fapi._start_preview = lambda h, body: pv.update(body)
+        try:
+            h5 = _FakeHandler()
+            fapi._cover_octaves(h5, cov["id"], {"variants": [{"octave": 0}, {"octave": 1}]})
+        finally:
+            _fh.get, fapi._start_preview = realg, realp
+        assert [v["label"] for v in pv["variants"]] == ["octave +0, key +2", "octave +1, key +2"], pv["variants"]
+        assert [fapi._signed(v) for v in (None, -1.0, 1.5, float("nan"), float("inf"), "x")] == ["+0", "-1", "+1.5", "+0", "+0", "+0"]
         f = ear.fix_for("cover", ["key"], {"name": "zed-uc"}, {"octave": -2}, "x")
         assert f["do"]["options"] == {"octave": -1} and "alt" not in f and f["say"].startswith("Too low"), f
         # a downloaded voice: train a proper one; speech: pace has a fix; a reason without one: no fix
@@ -10265,6 +10475,27 @@ def u_leadgate():
         said = G.note(g, "top", backing_converted=True, missing=gone)
         assert said and not any("top voice was converted" in s for s in said) and any("and have no top voice to move" in s and "backing's voice" in s for s in said), said
         assert any("top voice was converted" in s for s in G.note(g, "top", missing=[]))
+        # a write cut off part way (a kill, a full disk) leaves no gate stem that a later edit would take as made
+        real_write = sf.write
+
+        def cut_off(f, data, *a, **k):
+            if "gate_lead_" in str(f):
+                real_write(f, data[:len(data) // 3], *a, **k)
+                raise OSError("the disk is full")
+            return real_write(f, data, *a, **k)
+        sf.write = cut_off
+        try:
+            G.apply(stems, g, tmp, "cut")
+            raise AssertionError("written")
+        except OSError:
+            pass
+        finally:
+            sf.write = real_write
+        assert not (tmp / "gate_lead_cut.flac").exists() and not list(tmp.glob("*.part*")), list(tmp.iterdir())
+        from undercover.frontman import pipeline as _PLk, remix as _RXg, songs as _SGg
+        _src = __import__("inspect").getsource   # the other files whose being there is their proof: whole or not at all
+        assert "fsutil.write_text(cache," in _src(_PLk.song_key)
+        assert "fsutil.write_text(up /" in _src(_SGg.register_song) and "write_whole(p," in _src(_RXg._reverb_ir)
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
     assert any("left to the original singers" in s for s in G.note(g, "keep"))
     said = G.note(g, "keep", backing_converted=True)   # (a backing sung by a voice: the lines in it are sung by that voice too)
@@ -16026,6 +16257,26 @@ def u_body_close():
                 twice += [f"{f.name}:{node.name}.{n}" for n in set(names) if names.count(n) > 1]
     assert not twice, f"a method defined twice in one class: {twice}"
     return "an unread body ends the connection; a read one keeps it; a dropped upload during a move says the move; no method twice"
+@check("a night item's job names the training project it writes under (improve, a queued project, a new voice), so the real-folder check can tell the user's own server's training from a run's")
+def u_job_project():
+    import inspect
+    from undercover.core import jobs
+    from undercover.doubleagent import night, service
+    j = jobs.Job("night", title="Improve someone")
+    j.resume_spec = {"kind": "night", "item": "abc", "label": "Improve someone"}
+    assert j.snapshot()["project"] is None
+    j.project = "someone"
+    assert j.snapshot()["project"] == "someone"
+    k = jobs.Job("train", title="t")
+    k.resume_spec = {"kind": "train", "project": "other"}
+    assert k.snapshot()["project"] == "other", "a training's own project went missing"
+    src = inspect.getsource(night._improve)
+    assert src.index("job.project = proj.name") > src.index("proj = _project_for_item(item, create=True)")
+    src = inspect.getsource(night._project)
+    assert src.index('job.project = item["target"]') < src.index("service.run_project(")
+    src = inspect.getsource(service.train_new_voice)
+    assert src.index("job.project = proj.name") < src.index("busy = next(")
+    return "improve, a queued project and a new voice each name their project"
 
 
 @check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
@@ -16076,7 +16327,7 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
