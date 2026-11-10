@@ -276,7 +276,7 @@ html:not([data-skin="winamp"]) {
       & .hbtns .icon-btn, & #se-clear { min-width: 44px; }
       & #se-clear { text-align: end; }
       & .se-tags-hint > summary { padding-block: 11px; }
-      & :is(.check, .toggle, .se-toggle):has(> input[type=checkbox]) { min-height: 44px; align-items: center; }
+      & :is(.check, .toggle, .se-toggle):has(> input[type=checkbox]) { min-height: 44px; }   /* (the box stays on the label's first line) */
     }
     & .lib-tools input { flex: 1 1 100%; }
     & .rn-now { padding: 16px; }

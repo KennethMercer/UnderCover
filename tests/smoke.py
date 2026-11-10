@@ -14696,7 +14696,7 @@ def u_token_ratios():
     look = (web / "look.css").read_text(encoding="utf-8")
     assert "& .cats { flex-wrap: wrap; }" in look and "& .cats { flex-wrap: nowrap; overflow-x: auto;" not in look
     assert "& .hbtns .icon-btn, & #se-clear { min-width: 44px; }" in look and "& .se-tags-hint > summary { padding-block: 11px; }" in look
-    assert "& :is(.check, .toggle, .se-toggle):has(> input[type=checkbox]) { min-height: 44px; align-items: center; }" in look
+    assert "& :is(.check, .toggle, .se-toggle):has(> input[type=checkbox]) { min-height: 44px; }" in look
     assert '<div class="hist" id="hist"><p class="meta">Loading…</p></div>' in ix and '<div class="se-recent" id="se-recent"><p class="meta">Loading…</p></div>' in ix
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
