@@ -5417,7 +5417,7 @@ def u_launcher_moved():
     if os.name != "nt":
         return "repointed once, never in tests / sandboxes / installed copies, retried after a failure (no Windows here for the .lnk round trip)"
     with tempfile.TemporaryDirectory(prefix="uc-lnk-") as td:
-        d = Path(td)
+        d = Path(td).resolve()   # (the long name: a TEMP given in 8.3 form, as GitHub's runner's is, comes back long from PowerShell)
         old, new, other = d / "UnderCover.bat", d / "scripts" / "UnderCover.bat", d / "Other.bat"
         sub = d / "Startup"
         platform.startup_entry(True, old, folder=d)                  # UnderCover.lnk -> the old .bat
@@ -7910,7 +7910,7 @@ def u_installer_pass12():
         assert ps("detect_gpu.ps1", "'ok'") == "ok"
         # 5. a moved [paths]: a folder left at the install folder is counted where config.toml keeps it
         with tempfile.TemporaryDirectory(prefix="uc-kept-") as td:
-            app = Path(td) / "app"
+            app = Path(td).resolve() / "app"   # (the long name: GetFullPath expands a TEMP in 8.3 form, as GitHub's runner's is)
             (app / "elsewhere").mkdir(parents=True)
             (app / "elsewhere" / "m.bin").write_bytes(bytes(2 * 1024 * 1024))
             (app / "config.toml").write_text('[gpu]\nbackend = "rocm"\n\n[paths]\nmodels_dir = "E:\\\\Moved\\\\models"\n'
@@ -10994,9 +10994,15 @@ def u_duets():
         _sf.write(str(kd / "vocals.flac"), tone, sr)
         assert _PL2.backing_quiet(kd) is None   # one stem alone: an interrupted split
         _sf.write(str(kd / "instrumental.flac"), hiss, sr)
-        assert _PL2.backing_quiet(kd) is True
+        from undercover.core import manifest as _MF
+        try:   # the loudness is ffmpeg's (remix.lufs): a PC without it (GitHub's runner) gets None, no note, and no failure
+            _MF.ffmpeg()
+            has_ff = True
+        except Exception:   # noqa: BLE001 - ModelError: not installed
+            has_ff = False
+        assert _PL2.backing_quiet(kd) is (True if has_ff else None)
         _sf.write(str(kd / "instrumental.flac"), tone, sr)
-        assert _PL2.backing_quiet(kd) is False
+        assert _PL2.backing_quiet(kd) is (False if has_ff else None)
         _sf.write(str(kd / "vocals.flac"), np.zeros(sr * 4, np.float32), sr)
         _sf.write(str(kd / "instrumental.flac"), hiss, sr)
         assert _PL2.backing_quiet(kd) is None   # no lead found (sung in harmony): its own note, not this one
@@ -11016,7 +11022,8 @@ def u_duets():
     assert "lufs(back) < BACKING_QUIET_LUFS" in _i2.getsource(_PL2.CoverEngine._duet_backing)   # one line for both
     assert "backing_quiet(k_dir) if opts.duet_voice and song is not None" in _i2.getsource(_PL2.estimate_for)
     assert "S.estimate.song === S.song?.id" in js and "summary(); duetBackNote();" in js   # (another song's measure is never said)
-    return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
+    return ("Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
+            + ("" if has_ff else "; the quiet backing's loudness not measured (no ffmpeg here): said as nothing"))
 
 
 def _js_between(src: str, start: str, end: str) -> str:
