@@ -379,12 +379,14 @@ def _landed(doc: dict, t0: float, t1: float, a: tuple, b: tuple) -> str:
     return f"It starts {start} and ends {end} ({_clock(a[0])}–{_clock(b[0])}){heard}."
 
 
-def check_edit(req, doc: dict, item: dict | None = None) -> dict:
+def check_edit(req, doc: dict, item: dict | None = None, say: dict | None = None) -> dict:
     """The one gate for an edit, from the page or an AI: every field, the stretch resolved and its edges snapped, and the plan
     it leaves checked -> the edit as it will be stored (no files yet). ModelError with a plain sentence; the list is unchanged.
     item: the cover's history line. Under "The other singer" (duet_backing "other") the backing is sung by whoever isn't on the
     lead, so a stretch's lead given to the other singer takes its backing with it (`follow`), wherever no backing edit of the
-    user's stands, and the edit says so (Internal Affairs H3)."""
+    user's stands, and the edit says so (Internal Affairs H3).
+    say: filled for a choice not yet made (the price): "landed", where the stretch lands (the stored sentence without the
+    backing's), and "if", the backing's as a condition on this choice, when it follows."""
     if not isinstance(req, dict) or set(req) - set(FIELDS):
         raise ModelError("That edit has something UnderCover doesn't know in it.")
     clean = _fields_of(req)
@@ -425,8 +427,16 @@ def check_edit(req, doc: dict, item: dict | None = None) -> dict:
         if [p[:4] for p in got] != was:   # (theirs all through: nothing moves, nothing's said)
             to = duets._other(clean["who"])
             kept = any(p[2] != to for p in got if span[0] <= p[0] and p[1] <= span[1])   # (a backing edit of the user's stands)
-            said = f"The backing goes to {label_of(_voice_of(to, opts))} with it" + (", except where you changed it." if kept else ".")
+            # said once the change is made (its row in the list); before a choice, only as a condition on that choice (Internal
+            # Affairs pass 15 S2: "goes to" read as what already was, beside the landing and after Keep)
+            but = ", except where you changed it." if kept else "."
+            said = f"The backing went to {label_of(_voice_of(to, opts))} with it{but}"
             edit["follow"], edit["moved"] = span, f"{moved[:MAX_SAID - len(said) - 1]} {said}".strip()[:MAX_SAID]
+            if say is not None:
+                say["if"] = (f"If {label_of(_voice_of(clean['who'], opts))} takes it, the backing goes to "
+                             f"{label_of(_voice_of(to, opts))} with it{but}")
+    if say is not None:
+        say["landed"] = moved[:MAX_SAID]
     done = compile_list(doc, live + [edit])
     if any(p[2] == ORIGINAL and p[3] is not None for p in done["backing"]):
         raise ModelError("The song's own backing stays at its own pitch.")

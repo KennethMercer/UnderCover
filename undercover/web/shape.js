@@ -121,8 +121,8 @@ function shLanding(part) {
       : /near the end/.test(s) && !lines.some(l => l.words.at(-1) === b) ? " Take the stretch a little further, to the end of the line." : "";
     return { k: "no", s: s + way };
   }
-  const e = ok.ok.edit;
-  if (e.moved) return { k: /may be heard/.test(e.moved) ? "warn" : "ok", s: e.moved };   // (the gate's one sentence: where it landed)
+  const e = ok.ok.edit, m = ok.ok.landed ?? e.moved;   // (where it lands; the backing's sentence goes with its own choice: shBar)
+  if (m) return { k: /may be heard/.test(m) ? "warn" : "ok", s: m };   // (the gate's one sentence: where it landed)
   const w = e.words || SH.pick, d = SH.doc;
   const from = e.t0 <= 0.05 ? "Starts at the top of the song" : "Starts in the pause before “" + shBare(shWord(w[0])) + "”";   // (plain text)
   const to = e.t1 >= d.duration - 0.05 ? "ends at the end of the song" : "ends in the pause after “" + shBare(shWord(w[1])) + "”";
@@ -288,6 +288,7 @@ function shBar() {
     if (!ok.length) return part === "lead" ? "" : `<div class="sh-choice"><span class="lab">${lab}</span><span class="land-say no">${esc(bl.s)}</span></div>`;
     const poor = ok.map(x => x.ok.fit?.said).filter(Boolean);
     return `<div class="sh-choice"><span class="lab">${lab}</span>${ok.map(x => `<button class="pill" type="button" data-pick-c="${SH.probes.indexOf(x)}">${esc(x.c.label)}</button>`).join("")}</div>`
+      + ok.map(x => x.ok.if ? `<p class="meta">${esc(x.ok.if)}</p>` : "").join("")   // (the backing that would go with a choice: plain text, not announced)
       + (bl && bl.s !== land?.s && bl.k !== "ok" ? `<p class="land-say ${bl.k}">${esc(bl.s)}</p>` : "")
       + poor.map(s => `<p class="land-say warn">${esc(s)}</p>`).join("");
   };

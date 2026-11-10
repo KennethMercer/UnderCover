@@ -10991,6 +10991,25 @@ def _js_run(script: str) -> list | None:
     return json.loads(m.group(1))
 
 
+@check("the one-shot's settings say why in plain words outside Deep Cover, the range's numbers only in it (Internal Affairs pass 15)")
+def u_oneshot_fit_words():
+    from undercover.frontman import oneshot as OS
+    assert OS.fit_words(0.0) == "the whole melody in the voice's range"
+    assert OS.fit_words(0.004) == "the whole melody in the voice's range"   # (said as 0% in Deep Cover)
+    assert OS.fit_words(0.12) == "most of the melody in the voice's range"
+    assert OS.fit_words(0.25) == "most of the melody in the voice's range"
+    assert OS.fit_words(0.4) == "much of the melody past the voice's range"
+    for o in (0.0, 0.12, 0.4):
+        assert not re.search(r"\d|Hz", OS.fit_words(o))
+    src = (ROOT / "undercover" / "frontman" / "oneshot.py").read_text(encoding="utf-8")
+    assert 'say = fit_words(fit["outside"])' in src and '**({"say": say} if say else {})' in src
+    js = (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
+    assert "<span data-basic> (${esc(set.say)})</span>" in js and "<span data-deep> (${esc(set.why)})</span>" in js, "whyWords"
+    # the why is drawn only through whyWords: never bare in the basic view
+    assert js.count("set.why") + js.count("settings.why") == 2 and js.count("whyWords(") == 2, "every why through whyWords"
+    return "plain words at 0%, 12%, 25%, 40%; the numbers in Deep Cover only"
+
+
 @check("duets in the one-shot (Internal Affairs D1): the plan, the voice step and the done line name both singers, taking turns; the done line's key is the cover's own (the fit for two); the say line keeps both names; a second singer who isn't a voice here is said before anything starts")
 def u_duet_oneshot_names():
     from types import SimpleNamespace
@@ -11010,8 +11029,15 @@ def u_duet_oneshot_names():
     plan2 = {"settings": {"octave": 1, "key": 2, "why": "w"}}
     OS.duet_settings(plan2, {"key": True, "octave": "x"}, [])   # (nothing a number can't be is taken)
     assert plan2["settings"] == {"octave": 1, "key": 2, "why": "w"}, plan2
+    # the first voice's fit in plain words isn't the duet's: it goes with the first numbers (Internal Affairs pass 15)
+    plan4 = {"settings": {"octave": 0, "key": 0, "why": "w", "say": "the whole melody in the voice's range"}}
+    OS.duet_settings(plan4, {}, [])
+    assert "say" not in plan4["settings"], plan4
+    # the voice step of a duet names both singers, once both are known (Internal Affairs pass 15)
+    assert OS.both_voices("Ann", "Bo") == "Using your voices “Ann” and “Bo”"
     src = (ROOT / "undercover" / "frontman" / "oneshot.py").read_text(encoding="utf-8")
     assert "if opts.duet_voice and item:" in src and 'duet_settings(plan, item.get("options") or {}, res.notes)' in src
+    assert 'push("voice", 1.0, both_voices(label_of(v.name), label_of(duet["voice"])))' in src
     # the plan: both names in the say line, the alone sentence before anything starts
     vs = {"barry-white-uc": "Barry White", "michael-jackson-uc": "Michael Jackson"}
     find = lambda p: [SimpleNamespace(name=n, display=d, extra={"trained": True}) for n, d in vs.items() if d.lower() == p.lower().strip()]
@@ -11158,21 +11184,31 @@ def u_duet_follow():
         e = E.check_edit(lead, doc, line(how))
         assert "follow" not in e and e["moved"] == "", e
     assert "follow" not in E.check_edit(lead, doc)   # (no history line: as before)
-    e = E.check_edit(lead, doc, line("other"))
-    assert e["follow"] == [20.4, 40.4] and e["moved"] == "The backing goes to mj with it.", e
+    say = {}
+    e = E.check_edit(lead, doc, line("other"), say)
+    assert e["follow"] == [20.4, 40.4] and e["moved"] == "The backing went to mj with it.", e
+    # before the choice (the price): where it lands, and the backing only as a condition on the choice (Internal Affairs pass 15 S2)
+    assert say == {"landed": "", "if": "If bw takes it, the backing goes to mj with it."}, say
+    say = {}
+    E.check_edit({"op": "octave", "part": "lead", "octave": 1, "t0": 20.4, "t1": 40.4}, doc, line("other"), say)
+    assert say == {"landed": ""}, say   # (an octave keeps its singer: nothing follows, no "if")
     doc["edits"], doc["cursor"] = [e], 1
     assert [p[:5] for p in E.compile_list(doc)["backing"]] == [[0.0, 20.5, "A", None, None], [20.5, 40.4, "A", None, "e1"], [40.4, 60.0, "B", None, None]], E.compile_list(doc)
     # the landing sentence comes first, then the backing's
-    e = E.check_edit({**lead, "t0": 19.0}, fresh(), line("other"))
-    assert e["moved"].startswith("It starts just after ") and e["moved"].endswith("). The backing goes to mj with it."), e
+    say = {}
+    e = E.check_edit({**lead, "t0": 19.0}, fresh(), line("other"), say)
+    assert e["moved"].startswith("It starts just after ") and e["moved"].endswith("). The backing went to mj with it."), e
+    assert say["landed"].startswith("It starts just after ") and say["landed"].endswith(").") and "backing" not in say["landed"], say
     # a backing edit of the user's on that stretch stands, before the lead's edit or after it
     # (B is the base's backing there: an edit that gives it back to the base's singer stands too)
     for who, src in (("B", None), ("original", "e1")):
         d = fresh()
         bk = E.check_edit({"op": "singer", "part": "backing", "who": who, "t0": 29.0, "t1": 31.0}, d)
         d["edits"], d["cursor"] = [bk], 1
-        e = E.check_edit(lead, d, line("other"))
-        assert e["moved"] == "The backing goes to mj with it, except where you changed it.", e
+        say = {}
+        e = E.check_edit(lead, d, line("other"), say)
+        assert e["moved"] == "The backing went to mj with it, except where you changed it.", e
+        assert say["if"] == "If bw takes it, the backing goes to mj with it, except where you changed it.", say
         d["edits"], d["cursor"] = [bk, e], 2
         back = E.compile_list(d)["backing"]
         assert [p[2:5] for p in back if bk["t0"] <= p[0] and p[1] <= bk["t1"]] == [[who, None, src]], back
@@ -11257,7 +11293,7 @@ def u_duet_follow():
             doc = E.apply(engine, it, lead, lambda *x: None)
             assert sorted(calls) == [("bw", False), ("mj", True)], calls   # the lead in B's voice, the backing in A's, one line held
             e1 = doc["edits"][0]
-            assert e1["follow"] == [20.4, 40.4] and e1["files"] == {"lead": "e1-lead.flac", "backing": "e1-backing.flac"} and e1["moved"] == "The backing goes to mj with it.", e1
+            assert e1["follow"] == [20.4, 40.4] and e1["files"] == {"lead": "e1-lead.flac", "backing": "e1-backing.flac"} and e1["moved"] == "The backing went to mj with it.", e1
             assert E.load(it["id"])["edits"][0] == e1   # (read back as sound)
             d = E.folder(it["id"])
             back, _ = sf.read(str(d / "take-backing.flac"), dtype="float32")
@@ -14913,6 +14949,10 @@ def u_page_rules():
     assert 'data-shape="${h.id}" data-pc>Shape it</button><span class="meta" data-phone>Shape it on the PC</span>' in app
     assert "SH.jobs.has(j.id)" in app and "!/^Editing /.test(j.title" in app   # (an edit's step isn't a cover's progress)
     assert "/edits/price" in shape and "fit?.said" in shape and "x.ok.fit?.said" in shape   # the fit said before and as it's sung
+    # before a choice the landing is where it lands only; the backing that would follow is said under the choices, as "if", and
+    # not in a line the live region reads (Internal Affairs pass 15 S2)
+    assert "m = ok.ok.landed ?? e.moved" in shape and '`<p class="meta">${esc(x.ok.if)}</p>`' in shape
+    assert 'answer.update(say)' in (ROOT / "undercover" / "frontman" / "api.py").read_text(encoding="utf-8")
     assert "audio: ownPlayer(new Audio())" in shape and "PLAYERS.forEach(a => { a.volume = volumeNow(); });" in app   # Hear it is the page's player too
     assert "SH.retry ? `<span><button" in shape and "SH.retry = false; return shDraw(); }" in shape   # no Try again on an outright refusal
     import inspect as _ins_ed
@@ -18749,7 +18789,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_song_used, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_voice_model_missing, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe, u_installer_pass12, u_config_hand_edited, u_vault_settings_both, u_vault_keep_both_copy, u_vault_replace_keeps_current, u_vault_restore_forgets_voice, u_cleanup_guard,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_duet_follow, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden, u_shape_keys,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_oneshot_fit_words, u_duet_shape_words, u_duet_follow, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden, u_shape_keys,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_link_offered, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk, u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut, u_lead_pause, u_not_english, u_perf_voices, u_perf_static, u_perf_voicecheck, u_perf_duet_feats, u_perf_validate, u_perf_stems_flac):
