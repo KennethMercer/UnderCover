@@ -168,6 +168,39 @@ def _end_orphans():
             pass
 
 
+def end_leftovers() -> int:
+    """At startup, while this release doesn't offer the link: a tailscaled still running from this install's own
+    models folder is a leftover from an older UnderCover (a crash, End task, an update over a running copy), which kept
+    no record of it, so _end_orphans can't find it. It's ended, so nothing keeps the PC on the tailnet after the update.
+    Only our own program, matched by its full path and again (with the start time read at the listing) just before it's
+    ended; never another Tailscale. Logged once. -> how many were ended."""
+    if OFFERED or CMD:
+        return 0
+    prog = bin_dir() / platform.tailscale_names()[0]
+    try:
+        if not prog.is_file():
+            return 0
+        want = os.path.normcase(str(prog.resolve()))
+        found = {pid: platform.process_started(pid) for pid, p in platform.processes().items()
+                 if pid != os.getpid() and os.path.normcase(p) == want}
+    except (platform.NotOnThisOS, OSError):
+        return 0
+    ended = 0
+    for pid, started in found.items():
+        try:   # (the same process still: our program and the start time it had, never one given that pid since)
+            if started is None or platform.process_started(pid) != started \
+                    or os.path.normcase(platform.process_path(pid)) != want:
+                continue
+            os.kill(pid, 15)   # (SIGTERM; Windows ends the process)
+            ended += 1
+        except OSError:
+            pass
+    if ended:
+        from .doctor import log
+        log("Your phone: a secure-link piece an older UnderCover left running was stopped (this version doesn't use it).")
+    return ended
+
+
 def _keep_pid(p):
     """The daemon this state folder started: its pid and start time, so the next start can tell a leftover."""
     from . import fsutil
