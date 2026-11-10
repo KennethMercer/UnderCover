@@ -165,6 +165,11 @@ def setup(make_server, port: int, make_away=None):
     closed for good when the last such phone has moved. make_away: the link's listener, opened while the link is on."""
     _L["make"], _L["port"] = make_server, port
     _A["make"] = make_away
+    from ..core import tailnet
+    try:
+        tailnet.end_leftovers()   # (a release without the link: an older version's daemon doesn't outlive the update)
+    except Exception:   # noqa: BLE001 - never block startup
+        pass
     if phone.lan_needed():
         listen()
     if phone.enabled():
