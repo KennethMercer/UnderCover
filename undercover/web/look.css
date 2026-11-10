@@ -266,9 +266,18 @@ html:not([data-skin="winamp"]) {
     & .oneshot .btn.go { flex: 1 1 100%; }
     & .ex { gap: 0 16px; } & .ex button { padding: 12px 0; margin: 0; }   /* each example a thumb's height, stacked without overlap */
     & .go-btns { width: 100%; } & .go-btns .btn, & .go-btns .convert { flex: 1 1 100%; width: auto; }
-    /* the kinds are one scrolling row; the search gets its own line */
-    & .cats { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: -16px; padding-inline: 16px; }
+    /* the kinds wrap, every one in sight (a scrolling row hid Training, and with it the kind selected, off the edge at 375: the
+       phone-width walk); the search gets its own line */
+    & .cats { flex-wrap: wrap; }
     & .cats .cat { flex: none; }
+    /* a thumb's 44 px for the small targets left (the phone-width walk), with the look kept: a ▶ in Recent covers, Clear, the
+       Directions line, and a checkbox's line */
+    @media (max-width: 480px) {
+      & .hbtns .icon-btn, & #se-clear { min-width: 44px; }
+      & #se-clear { text-align: end; }
+      & .se-tags-hint > summary { padding-block: 11px; }
+      & :is(.check, .toggle, .se-toggle):has(> input[type=checkbox]) { min-height: 44px; align-items: center; }
+    }
     & .lib-tools input { flex: 1 1 100%; }
     & .rn-now { padding: 16px; }
     /* the SafeHouse tab's dot (GPU, Doctor) sits by its icon in the bottom bar, not past the screen's edge */

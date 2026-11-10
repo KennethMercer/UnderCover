@@ -14691,6 +14691,12 @@ def u_token_ratios():
     assert 'couldntRead($("#st-places"), "where your files live", loadStorage)' in (web / "rooms.js").read_text(encoding="utf-8")
     # keys 1: a search box's focus ring is drawn on the box, as strong as an input's (its input's own ring is off)
     assert "& .sfield:has(input:focus) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }" in (web / "look.css").read_text(encoding="utf-8")
+    # phonefit: on a phone the Library's kinds wrap (none off the edge), and the small targets left reach 44 px; the look only, so the
+    # WinAmp skin is as it was
+    look = (web / "look.css").read_text(encoding="utf-8")
+    assert "& .cats { flex-wrap: wrap; }" in look and "& .cats { flex-wrap: nowrap; overflow-x: auto;" not in look
+    assert "& .hbtns .icon-btn, & #se-clear { min-width: 44px; }" in look and "& .se-tags-hint > summary { padding-block: 11px; }" in look
+    assert "& :is(.check, .toggle, .se-toggle):has(> input[type=checkbox]) { min-height: 44px; align-items: center; }" in look
     assert '<div class="hist" id="hist"><p class="meta">Loading…</p></div>' in ix and '<div class="se-recent" id="se-recent"><p class="meta">Loading…</p></div>' in ix
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
