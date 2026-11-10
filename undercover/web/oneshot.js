@@ -269,11 +269,13 @@ const keyWords = k => k ? `the song ${Math.abs(k)} semitone${Math.abs(k) === 1 ?
 // a duet's settings are the cover's own (one key for both, each singer at their own octave: the octaves stay in the why)
 const fitWords = (set, plan) => twoVoices(plan) ? keyWords(set.key) || "the song's own key"
   : octaveWords(set.octave) + (set.key ? ` · ${keyWords(set.key)}` : "");
+// the settings' why: in plain words (set.say), its numbers in their place in Deep Cover (Internal Affairs pass 15)
+const whyWords = set => (set.say ? `<span data-basic> (${esc(set.say)})</span>` : "") + (set.why ? `<span data-deep> (${esc(set.why)})</span>` : "");
 const whoSang = plan => `<b>${esc(plan.voice ? plan.voice.display || voiceDisplay(plan.voice.name) : plan.person || "")}</b>` +
   (twoVoices(plan) ? ` &amp; <b>${esc(duetWith(plan))}</b>, taking turns` : "");
 function doneLine(plan, elapsed) {
   return `Done in ${fmtSecs(elapsed || 0)}: <b>${esc(plan.song?.title || "")}</b> with ${whoSang(plan)}` +
-    (plan.settings ? ` · ${esc(fitWords(plan.settings, plan))}<span data-deep> (${esc(plan.settings.why)})</span>` : "") + ". Change anything below and press Convert to try a variation.";
+    (plan.settings ? ` · ${esc(fitWords(plan.settings, plan))}${whyWords(plan.settings)}` : "") + ". Change anything below and press Convert to try a variation.";
 }
 function card(stage) { return $(`#os-running .pstep[data-s=${stage}]`); }
 function renderOS(ev) {
@@ -304,7 +306,7 @@ function renderOS(ev) {
   const kept = set?.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "";
   $("small", cc).innerHTML = ev.stage === "cover" && !ev.final ? esc(ev.message)
     : set && two && !(ev.final && ev.state === "done") ? "Best settings" + kept   // (a duet's key is the cover's own, found as it's made)
-    : set ? esc(`Best settings · ${fitWords(set, plan)}`) + `<span data-deep> (${esc(set.why)})</span>` + kept : "Best settings";
+    : set ? esc(`Best settings · ${fitWords(set, plan)}`) + whyWords(set) + kept : "Best settings";
   OS.eta = ev.total_left ?? ev.eta ?? null; OS.etaAt = performance.now();
   // before the cover itself starts, never count less than what's left of the picked path (a check's whole time, then the cover): the server's first number was the cover's alone
   if (OS.pathEta && !ev.final && ev.stage !== "cover") OS.eta = Math.max(OS.eta ?? 0, OS.pathEta - (OS.etaAt - OS.pathAt) / 1000);

@@ -493,6 +493,8 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             spec["prefer_train"] = True
         raise
 
+    if duet and duet["voice"] and duet["voice"] != v.name:   # a duet's step names both singers (Internal Affairs pass 15)
+        push("voice", 1.0, both_voices(label_of(v.name), label_of(duet["voice"])))
     # the gate (phase 15): a weak voice is said plainly, here and with the cover, never handed over silently
     q = voice_quality(v)
     pv = plan.get("voice")
@@ -530,6 +532,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
         octave, key = fit["octave"], fit["key"]
         why = (f"{fit['outside']:.0%} of the melody outside the voice's range "
                f"({rng[0]:.0f}-{rng[2]:.0f} Hz{', from speech' if speech else ''})")
+        say = fit_words(fit["outside"])
         plan["settings_fit"] = fit
         if fit["outside"] > 0.25:   # a very high or very low voice (a child's, a cartoon's) against a wide melody
             plan["fit_note"] = (f"{fit['outside']:.0%} of the melody is still outside this voice's range after moving it "
@@ -541,8 +544,9 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
         octave = pick_octave(vhz, speech, song_hz)
         why = (f"song melody ~{song_hz:.0f} Hz, voice ~{vhz:.0f} Hz" if vhz and song_hz
                else "voice range unknown, kept the singer's octave")
+        say = "set by the voice's pitch" if vhz and song_hz else None
     plan["settings"] = {"octave": octave, "key": key, "song_pitch_hz": song_hz, "voice_pitch_hz": vhz,
-                        "why": why}
+                        "why": why, **({"say": say} if say else {})}   # (why: the numbers, for Deep Cover; say: in plain words)
     # Stacked backing harmonies don't survive RVC (it follows one pitch): keep the original singers there, a bit
     # quieter, and convert only the lead (review B5).
     chordal = chordal_backing(stems.get("backing"), gpu.MODELS.converter.rmvpe)
@@ -557,6 +561,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             opts = replace(opts, duet_voice=duet["voice"], duet_way=DUET_DEFAULT, fit=True, backing_voice=None,
                            duet_backing="original" if chordal else None)   # (stacked harmony: the original, as for one)
             plan["duet"].update(way=DUET_DEFAULT, display=label_of(duet["voice"]))
+            plan["settings"].pop("say", None)   # (the first voice's fit alone, in words: the duet's own why comes with the cover)
             push("cover", 0.0, f"{label_of(v.name)} and {label_of(duet['voice'])} take turns")
         else:
             plan["duet"]["alone"] = duet_alone(duet["with"], duet["voice"], label_of(v.name))
@@ -658,6 +663,19 @@ def cover_options_of(opts: "CoverOptions") -> dict:
     return {k: v for k, v in asdict(opts).items() if k not in ("voice", "duet_plan") and v is not None}
 
 
+def both_voices(first: str, second: str) -> str:
+    """A duet's voice step, once both singers are known: the first one's own line named only it."""
+    return f"Using your voices “{first}” and “{second}”"
+
+
+def fit_words(outside: float) -> str:
+    """How much of the melody the fit put inside the voice's range, in plain words: the basic view's half of the settings'
+    why (Internal Affairs pass 15: its Hz numbers belong in Deep Cover)."""
+    return ("the whole melody in the voice's range" if outside < 0.005 else
+            "most of the melody in the voice's range" if outside <= 0.25 else
+            "much of the melody past the voice's range")
+
+
 def duet_settings(plan: dict, used: dict, notes: list) -> None:
     """A duet's settings as the cover made them: the fit for two sets one key and each singer's octave while the cover
     runs (pipeline._fit_duet), so the plan's first numbers (the first voice's own fit) give way to the cover's own
@@ -674,6 +692,7 @@ def duet_settings(plan: dict, used: dict, notes: list) -> None:
     said = next((n for n in notes or [] if isinstance(n, str) and n.startswith(("Fit for two:", "Fit to voice:"))), None)
     if said:
         s["why"] = said.split(":", 1)[1].strip().rstrip(".")
+    s.pop("say", None)   # (the first voice's fit alone, in words: not the duet's)
     plan.pop("settings_fit", None)   # (the first voice's alone: no octave pick between two of its fits on a duet)
 
 

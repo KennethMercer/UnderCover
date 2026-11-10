@@ -287,7 +287,12 @@ def _edit(h, item_id: str, what: str | None, body: dict):
     to = None if doc is None else doc["cursor"] + {"undo": -1, "redo": 1}.get(what, 0)
     try:
         if what in (None, "price"):
-            answer["edit"] = edits.check_edit(body, doc, it)
+            say = {}
+            answer["edit"] = edits.check_edit(body, doc, it, say)
+            if what == "price":   # (a choice not made yet: where it lands, and the backing only as "if")
+                answer["landed"] = say.get("landed", "")
+                if say.get("if"):
+                    answer["if"] = say["if"]
             answer["fit"] = edits.price(it, doc, answer["edit"])   # (the fit said before anything is sung)
         elif what in ("undo", "redo") and not 0 <= to <= len(doc["edits"]):
             raise ModelError(f"There's nothing to {what}.")

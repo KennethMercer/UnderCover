@@ -585,14 +585,16 @@ redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passe
   tracks are read once and kept with the list (`pitch.npz`: the lead's, and the backing's one line held; read back as data, no
   pickles). They're read when a duet's cover is recorded, when the list is first opened, or with the next edit of an older list, and
   Keep carries them. `POST .../edits` answers `{job, edit, fit}`; `POST .../edits/price` runs the gate and the price and sings
-  nothing, for the page to say it before the edit is offered.
+  nothing, for the page to say it before the edit is offered: `{edit, fit, landed, if?}`, `landed` where the stretch lands (or
+  ""), and `if` the backing that would follow this choice, as a condition.
 - **`compile_list`** is pure: plans and edits as far as the cursor -> parts `[start, end, who, octave, src, base]`. `plan_of` makes
   the lead a plan, so `duet_plan` stays true. A stretch given back to what the base has there needs no snippet.
   Under "The other singer" (`duet_backing: "other"`) the backing is whoever isn't on the lead, so a lead edit that changes
   who sings takes the stretch's backing with it (`follow`: the backing's own stretch, its edges at the backing's silences when
   there are some within 2 s, so no phrase changes voice halfway; a second snippet `<id>-backing.flac`), except where a backing
-  edit of the user's already stands. The edit's sentence says "The backing goes to <singer> with it" (", except where you
-  changed it.").
+  edit of the user's already stands. The made edit's sentence says "The backing went to <singer> with it" (", except where you
+  changed it."); before the choice, the price says it as "If <singer> takes it, the backing goes to <other> with it.", shown
+  under that choice.
 - **Rendering** converts the stretch with 0.5 s of context either side, through the cover's own settings, lays it over the base takes
   with a voice change's crossfade, and mixes the **whole song** (`remix`): a stretch mixed alone comes out of balance. The cover isn't
   touched. **Undo and redo** move the cursor and mix again, with no conversion. A new edit cuts off what lay past the cursor.
