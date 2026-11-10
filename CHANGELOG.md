@@ -5,36 +5,55 @@ in brackets.
 
 ## Not released yet
 
-**Your phone** (onephone)
-- One setup and one link for your phone, at home and anywhere else. Set up on the PC gets the secure-link piece and
-  asks you to sign in to Tailscale once; then your phone scans a code and you press Allow on the PC. Away from home is
-  no longer a separate switch.
-- A phone paired on the home Wi-Fi before keeps working there and gets one Switch button to move to the new link.
-- Removing a phone ends its way in at once and clears what it kept. Turn off the phone link and nothing reaches the PC
-  from a phone.
-- A phone can have three jobs waiting or running at a time. Deleting covers, speech, songs and training projects is
-  done on the PC.
-- Two copies of UnderCover on one PC each keep their own phone link.
-- Hardening.
-- Hardening of a phone's job count.
-- A phone that isn't used for 30 days is let go: it connects again with a new code. Hardening of the link before a
-  phone has connected.
-- Hardening of the phone link's switch between public and private.
+**Duets** (nobacking, holdparts, residue, notop, chordnote, duetpolish, duetwords, shapeh)
+- The one-shot names both singers from the start ("Barry White & Michael Jackson, taking turns"), and the finished line
+  gives the key the two share.
+- A backing with harmonies is sung as one part, held through a crossing, instead of hopping between parts.
+- In a chorus kept as it is, what's left of the lead under those lines stays silent, and the notes say who sings them.
+- Before Convert, a duet says when the song has almost no backing, so the second singer has little to take there.
+- Where the backing is a chord of several voices, the notes name the times, since one singer may waver there.
+- The duet's words read plainly: who takes the verses and who the choruses, and who sings the backing.
 
-**FrontMan** (nobacking, holdparts, residue, notop, firstopen, chordnote)
-- Under Low profile, opening Shape it for the first time and a duet's verses and choruses hear the words again: the
-  speech worker gets the room Whisper needs, then gives it back. A limit too small for it says so.
-- Before Convert, a duet says when a song already split has almost no backing, so you know the second singer has
-  little to take there.
-- A backing stem with harmonies is sung as one part, held through a crossing: where two parts cross inside a note, the
-  voice stays on the part it was on instead of hopping to the other.
-- In a chorus kept as it is, what's left of the lead under those lines is silent, and the cover's note says who sings
-  them. With the top voice moved to the lead, a line with no top voice to move stays where it was.
-- When a converted backing is a chord of several voices, the cover's note names the times, since one singer may waver
-  there.
+**Shape it** (editpage, octprice2, shapeia, bugs-fm, firstopen, shapeh)
+- New: a cover's own list of changes. Pick a stretch of its words, give it to the other singer or move it an octave,
+  hear it sung again in seconds, undo, and keep the version you like as a new cover.
+- Before an octave change, it says plainly when the voice won't fit there.
+- It says in one sentence where a change lands, and under the other singer's backing the backing follows the lead.
+- The first and last lines of a song can be changed, and a change sings from the cover's own cleaned lead.
+- It works by keyboard, and a kept version has one name everywhere.
 
-**Installer** (xttssize)
-- Ticking the XTTS-v2 add-on counts its 2 GB in the space setup checks for.
+**The page** (bones1, findset, wave2, bones2p, polish3, polish4, polish5, polish6, polish7, firstpolish, phonecopy)
+- Find a setting: type what you're after ("backup", "theme", "restart") and the right row comes up, Storage's
+  included.
+- One type scale, spacing on a grid, larger tap targets, and lines and quiet text you can see on every theme.
+- A song's stems, a voice card's numbers and other expert detail stay in Deep Cover; Settings reads in a narrower
+  column; the app's own housekeeping stays out of the basic view.
+- A list that couldn't load says so, with Try again, and a failed refresh keeps what's on screen.
+- A first install reads right: the demo voice and the sample song say what they are, and restart and quit say to use
+  the Start menu.
+
+**Quicker and steadier** (perf1, perf2, cap16k, bugs-core, bugs-da, bugs-vault, metaread, voicemissing)
+- The Library, the voice list, voice checks and page loads are faster; a cover reads each stem once.
+- Changing a setting no longer asks for a restart, and Restart and Quit wait for work that can't be paused.
+- Overnight Improve and retraining start from the right place; a crash early in a training can't wipe its saves.
+- Every form of `[pause]` is a pause, never read aloud, and text that isn't English is named as left out.
+- Vault restores and Clean up stay safe, and settings written by hand keep working.
+- A voice whose model file is missing says so by name, and how to get it back.
+
+**Fixes** (quietdrops, plainerr2, bodyclose)
+- The server's log keeps real problems only: a closed tab or a dropped connection no longer leaves an error there.
+- A full disk, the PC running out of memory and no internet connection each say what to do, instead of "Something went wrong".
+- An upload that drops while UnderCover's files are being moved says so, instead of saying contact was lost.
+- Hardening of how the server answers an upload it refuses.
+
+**Installer** (inst12, xttssize, xttsmeasured, port1)
+- A PC with an NVIDIA card whose driver isn't working is told so plainly; Repair finds a card that works now.
+- An update with moved folders counts space right, and uninstalling clears UnderCover's own cache but keeps your work.
+- Ticking the XTTS-v2 add-on counts its 2 GB.
+
+**Your phone** (onephone, linkflag)
+- The phone link is off in this version and comes back in a later one. Phones paired on the home Wi-Fi before keep
+  working there.
 
 ## 1.1.4 (2026-11-05)
 
@@ -69,17 +88,8 @@ in brackets.
 - In Deep Cover, away from home can be private: only devices signed in to your Tailscale reach it, with nothing on
   the public internet.
 
-**Fixes** (quietdrops)
-- The server's log keeps real problems only: a closed tab or a dropped connection no longer leaves an error there.
-**Fixes** (plainerr2)
-- A full disk, the PC running out of memory and no internet connection each say what to do, instead of "Something went wrong".
-
 **Fixes** (tidy1)
 - A file that only looks like a song (nothing in it plays) is refused with a plain message.
-
-**Fixes** (bodyclose)
-- An upload that drops while UnderCover's files are being moved says so, instead of saying contact was lost.
-- Hardening of how the server answers an upload it refuses.
 
 ## 1.1.3 (2026-10-29)
 
