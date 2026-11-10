@@ -142,6 +142,15 @@ async function api(path, opts = {}) {
 // action: optional { label, run } shown as a button in the banner; info: accent stripe instead of red
 // No command lines in the page (IA P8-7): "... Search for one with: python -m undercover.core.voices search x" is for developers, so the sentence goes.
 const plainMsg = m => String(m ?? "").replace(/\s*(?:Search for one with|Run|Try|Use):?\s*(?:python|py|pip)\s+-m\s.*$/i, "").trim();
+// A cover's notes when it's done (IA pass 15 S1: a duet's six, numbers and all, in a banner gone in 15 s). Deep Cover: every one. Basic:
+// the plain ones, two at most, and where the rest are; the fit and who-sings-when lines (numbers) stay in Deep Cover and under Notes
+const NOTE_DEEP = /^(Fit for two|Fit to voice|Duet):/;
+function coverNotes(notes) {
+  notes = notes.filter(n => typeof n === "string" && n.trim());
+  if (document.body.classList.contains("deep")) return notes.join(" ");
+  const plain = notes.filter(n => !NOTE_DEEP.test(n));
+  return plain.slice(0, 2).join(" ") + (plain.length > 2 ? " More under this cover's Notes, in SafeHouse." : "");
+}
 function showError(msg, title = "Something went wrong", action = null, info = false) {
   msg = plainMsg(msg);
   if (/^One is already waiting/.test(msg || "")) title = "One is already waiting";   // a retrained voice waits to be heard first
@@ -904,7 +913,8 @@ function startProgress(job, elsewhere = false) {
         // without the stream's last event (only the summary got through) the newest cover is this one
         if (elsewhere) loadHistory();
         else if (ev.result) showResult(ev.result, ev.seconds); else loadHistory().then(() => { if (ev.synthetic && HIST[0]) showResult(HIST[0]); });
-        if (ev.notes?.length) showError(ev.notes.join(" "), "Heads up", null, true);
+        const said = coverNotes(ev.notes || []);
+        if (said) showError(said, "Heads up", null, true);
         refreshEstimate();
       } else if (ev.state === "cancelled") {
         $("#progress").hidden = true;

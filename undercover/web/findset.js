@@ -23,7 +23,7 @@ function findAsked(q) { const ws = findWords(q), keep = ws.filter(w => !FIND_STO
 function findScore(e, qs) {
   if (!qs.length) return 0;
   const fields = [[findWords(e.name), 3], [findWords(e.find), 2], [findWords(findSaid(e.say)), 1]];
-  const has = (ws, w) => ws.some(x => x.startsWith(w));
+  const has = (ws, w) => ws.some(x => x.startsWith(w) || (w.length > 3 && w.endsWith("s") && x.startsWith(w.slice(0, -1))));   // ("themes" finds Theme)
   if (!qs.every(w => fields.some(([ws]) => has(ws, w)))) return 0;
   return Math.max(...fields.filter(([ws]) => qs.some(w => has(ws, w))).map(([, s]) => s));
 }

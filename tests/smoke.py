@@ -14376,6 +14376,14 @@ def u_find_setting():
     ok('"delete" doesn\'t find Your ear, "thumb" still does', !names("delete").includes("Your ear") && names("thumb").includes("Your ear"));
     ok("a clause after a negation is dropped, the rest kept", findSaid("Kept, never deleted; it isn’t removed. Moved here").trim().split(/\s+/).join(" ") === "Kept, ; it . Moved here");
     ear.hidden = earWas;
+    // a plural asks for the same row (IA pass 15: "themes" found nothing)
+    setDeep(true); ok('"themes" finds Theme, as "theme" does', names("themes").includes("Theme") && names("theme").includes("Theme")); setDeep(false);
+    // a cover's notes after Convert (IA pass 15 S1): basic says the plain ones, two at most, never the fit's numbers; Deep says all
+    const notes = ["Fit for two: key -5, A at octave -1, B at octave +0.", "Duet: 0:00 A · 1:07 B.", "Some lines are sung in harmony.", "The backing goes to the singer not on the lead.", "This song has almost no backing vocals."];
+    const basicSaid = coverNotes(notes);
+    ok("basic: two plain notes and where the rest are, no numbers", basicSaid.startsWith("Some lines are sung in harmony. The backing goes") && /More under this cover's Notes/.test(basicSaid) && !/octave|Duet:/.test(basicSaid));
+    ok("basic: only the fit's numbers says nothing", coverNotes(notes.slice(0, 2)) === "");
+    setDeep(true); ok("Deep Cover: every note", coverNotes(notes) === notes.join(" ")); setDeep(false);
     ok("the box is in Settings", $("#room-settings #sh-find") === box);
 
     type("away from home");
@@ -14706,6 +14714,11 @@ def u_token_ratios():
     assert "& .shape .btn.primary:disabled { background: var(--panel-3); color: var(--fg); }" in look and "& #os-plan { text-wrap: pretty; }" in look
     assert "& .lp-chip .lp-more::after { content: \"\"; position: absolute; inset: 0 -10px 0 -4px; }" in look
     assert "For a second singer" not in (web / "shape.js").read_text(encoding="utf-8")
+    # IA pass 15: a voice that reads but hasn't learned its own pace isn't "Can't speak yet"; Let it speak's tooltip names the voice as
+    # it's shown; the tour ends at step 4's Done, so a restart before "That's the job" is closed doesn't bring step 4 back
+    se = (web / "speakeasy.js").read_text(encoding="utf-8")
+    assert "Can't speak yet" not in se and '"Their own way: not yet"' in se and "`finds clips of ${shown} first`" in se and "shown !== v.name" in se
+    assert 'else if (n > 4) { TOUR.known = { ...(TOUR.known || {}), done: true }; api("/api/firstrun", { json: { done: true } })' in (web / "firstrun.js").read_text(encoding="utf-8")
     assert '<div class="hist" id="hist"><p class="meta">Loading…</p></div>' in ix and '<div class="se-recent" id="se-recent"><p class="meta">Loading…</p></div>' in ix
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
