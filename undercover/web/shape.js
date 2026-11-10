@@ -227,7 +227,7 @@ function shPaint(box) {
   }
   const live = shLive(), pick = SH.pick;
   let h = `<div class="ed">${head}<p class="meta">Pick a stretch of the words and say what should change there. Each change is sung again, and you hear it here. Nothing touches the cover until you keep it.</p>`;
-  if (!d.duet) h += `<p class="meta">One singer here, so the changes are octaves. For a second singer, make the cover again with a second singer.</p>`;
+  if (!d.duet) h += `<p class="meta">One singer here, so the changes are octaves. For two singers, make the cover again with a second singer.</p>`;
   if (d.duet) h += `<div data-deep><div class="strip" aria-hidden="true">${d.compiled.lead.map(p => `<i class="${p[2].toLowerCase()}" style="flex-grow:${p[1] - p[0]}"></i>`).join("")}</div>
     <div class="sh-legend"><span><i class="sh-dot a"></i>${esc(shName("A"))}</span><span><i class="sh-dot b"></i>${esc(shName("B"))}</span></div></div>`;
   if (!d.words.length) h += `<p class="meta">No words were heard in this cover, so there's nothing to pick here.</p>`;

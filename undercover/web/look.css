@@ -124,6 +124,17 @@ html:not([data-skin="winamp"]) {
     outline: none; box-shadow: inset 0 0 0 1.5px var(--accent); }
   /* a search box draws its ring on the box, not the input inside it (whose ring .sfield turns off): as strong as an input's, not a 1px
      border that only changes colour (SafeHouse's silver accent made Find a setting's focus hard to see). The input's focus only: a button in the box has its own */
+  /* the RC sign-off: Shape it's choices (octaves, a duet's singers) 32 px on the PC and 44 on a phone; a disabled Keep this version
+     on the panel's tone like Undo and Redo, not the accent; the one-shot's plan line wraps without a lone last word; SpeakEasy's
+     engine line's Add-ons link 32 px to press */
+  & .shape .pill { min-height: 32px; }
+  @media (max-width: 480px) { & .shape .pill { min-height: 44px; } }
+  & .shape .btn.primary:disabled { background: var(--panel-3); color: var(--fg); }
+  & #os-plan { text-wrap: pretty; }
+  & #se-engine-deep .linkbtn { padding-block: 8px; margin-block: -8px; }
+  /* Low profile's settings opener: 32 px wide to press, between the switch and Deep Cover and over neither */
+  & .lp-chip .lp-more { padding: 2px 4px; position: relative; }
+  & .lp-chip .lp-more::after { content: ""; position: absolute; inset: 0 -10px 0 -4px; }
   & .sfield:has(input:focus) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   & .seg { border-color: transparent; background: var(--panel-2); padding: 2px; gap: 2px; border-radius: 8px; overflow: visible; }
   & .seg button { border-radius: 6px; color: var(--muted); transition: background var(--t-fast), color var(--t-fast); }

@@ -14697,6 +14697,15 @@ def u_token_ratios():
     assert "& .cats { flex-wrap: wrap; }" in look and "& .cats { flex-wrap: nowrap; overflow-x: auto;" not in look
     assert "& .hbtns .icon-btn, & #se-clear { min-width: 44px; }" in look and "& .se-tags-hint > summary { padding-block: 11px; }" in look
     assert "& :is(.check, .toggle, .se-toggle):has(> input[type=checkbox]) { min-height: 44px; }" in look
+    # the RC sign-off: Shape it's small controls pressed through hit areas (32 on the PC, 44 on a phone), its choices 32/44 tall, a
+    # disabled Keep on the panel's tone, Low profile's opener 32 wide between its neighbours
+    app_css = (web / "app.css").read_text(encoding="utf-8")
+    assert ".shape .sh-play::after { content: \"\"; position: absolute; inset: -1px;" in app_css and ".shape .sh-bar .x::after { content: \"\"; position: absolute; inset: -7px -6px; }" in app_css
+    assert ".shape .sh-play::after { inset: -7px; }" in app_css and ".shape .sh-row .sh-play::after { inset: -9px; }" in app_css and ".shape .sh-bar .x::after { inset: -13px -12px; }" in app_css
+    assert "& .shape .pill { min-height: 32px; }" in look and "@media (max-width: 480px) { & .shape .pill { min-height: 44px; } }" in look
+    assert "& .shape .btn.primary:disabled { background: var(--panel-3); color: var(--fg); }" in look and "& #os-plan { text-wrap: pretty; }" in look
+    assert "& .lp-chip .lp-more::after { content: \"\"; position: absolute; inset: 0 -10px 0 -4px; }" in look
+    assert "For a second singer" not in (web / "shape.js").read_text(encoding="utf-8")
     assert '<div class="hist" id="hist"><p class="meta">Loading…</p></div>' in ix and '<div class="se-recent" id="se-recent"><p class="meta">Loading…</p></div>' in ix
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
