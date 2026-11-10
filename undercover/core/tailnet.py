@@ -180,16 +180,16 @@ def end_leftovers() -> int:
     try:
         if not prog.is_file():
             return 0
-        want = os.path.normcase(str(prog.resolve()))
+        want = {os.path.normcase(str(prog.absolute())), os.path.normcase(str(prog.resolve()))}   # (a folder reached by a link: either name)
         found = {pid: platform.process_started(pid) for pid, p in platform.processes().items()
-                 if pid != os.getpid() and os.path.normcase(p) == want}
+                 if pid != os.getpid() and os.path.normcase(p) in want}
     except (platform.NotOnThisOS, OSError):
         return 0
     ended = 0
     for pid, started in found.items():
         try:   # (the same process still: our program and the start time it had, never one given that pid since)
             if started is None or platform.process_started(pid) != started \
-                    or os.path.normcase(platform.process_path(pid)) != want:
+                    or os.path.normcase(platform.process_path(pid)) not in want:
                 continue
             os.kill(pid, 15)   # (SIGTERM; Windows ends the process)
             ended += 1
