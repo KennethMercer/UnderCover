@@ -14,7 +14,7 @@ anywhere.
 
 ## Install
 
-1. Run `UnderCover-Setup-1.1.4.exe`. Windows may say "Windows protected your PC", because the installer isn't signed.
+1. Run `UnderCover-Setup-1.2.0.exe`. Windows may say "Windows protected your PC", because the installer isn't signed.
    Click More info, then Run anyway. It installs for you only and never asks for admin rights.
    To check the download first, run `Get-FileHash` on it in PowerShell and compare the SHA-256 with the one on the
    release page.

@@ -3,7 +3,7 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
-## Not released yet
+## 1.2.0 (2026-11-10)
 
 **Duets** (nobacking, holdparts, residue, notop, chordnote, duetpolish, duetwords, shapeh)
 - The one-shot names both singers from the start ("<one singer> & <the other>, taking turns"), and when it's done it
