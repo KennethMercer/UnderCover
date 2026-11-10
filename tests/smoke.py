@@ -5417,7 +5417,7 @@ def u_launcher_moved():
     if os.name != "nt":
         return "repointed once, never in tests / sandboxes / installed copies, retried after a failure (no Windows here for the .lnk round trip)"
     with tempfile.TemporaryDirectory(prefix="uc-lnk-") as td:
-        d = Path(td)
+        d = Path(td).resolve()   # (the long name: a TEMP given in 8.3 form, as GitHub's runner's is, comes back long from PowerShell)
         old, new, other = d / "UnderCover.bat", d / "scripts" / "UnderCover.bat", d / "Other.bat"
         sub = d / "Startup"
         platform.startup_entry(True, old, folder=d)                  # UnderCover.lnk -> the old .bat
