@@ -16,7 +16,7 @@ in brackets.
 
 **Shape it** (editpage, octprice2, shapeia, bugs-fm, firstopen, shapeh)
 - Pick a stretch of a finished cover's words, give it to the other singer or move it an octave, hear it sung again in
-  about five seconds, undo, and keep the version you like as a new cover.
+  seconds, undo, and keep the version you like as a new cover.
 - Before an octave change, it says plainly when the voice won't fit there.
 - It says in one sentence where a change lands, and when the backing goes to the other singer, giving away a stretch's
   lead takes its backing with it.
