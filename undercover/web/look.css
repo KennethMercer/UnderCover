@@ -131,7 +131,7 @@ html:not([data-skin="winamp"]) {
   @media (max-width: 480px) { & .shape .pill { min-height: 44px; } }
   & .shape .btn.primary:disabled { background: var(--panel-3); color: var(--fg); }
   & #os-plan { text-wrap: pretty; }
-  & #se-engine-deep .linkbtn { padding-block: 8px; margin-block: -8px; }
+  @media (min-width: 481px) { & #se-engine-deep .linkbtn { padding-block: 8px; margin-block: -8px; } }   /* (a phone's link buttons are 44 already) */
   /* Low profile's settings opener: 32 px wide to press, between the switch and Deep Cover and over neither */
   & .lp-chip .lp-more { padding: 2px 4px; position: relative; }
   & .lp-chip .lp-more::after { content: ""; position: absolute; inset: 0 -10px 0 -4px; }
