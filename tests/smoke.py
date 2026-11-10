@@ -14952,7 +14952,7 @@ def u_page_rules():
     # before a choice the landing is where it lands only; the backing that would follow is said under the choices, as "if", and
     # not in a line the live region reads (Internal Affairs pass 15 S2)
     assert "m = ok.ok.landed ?? e.moved" in shape and '`<p class="meta">${esc(x.ok.if)}</p>`' in shape
-    assert 'answer.update(say)' in (ROOT / "undercover" / "frontman" / "api.py").read_text(encoding="utf-8")
+    assert 'answer["landed"] = say.get("landed", "")' in (ROOT / "undercover" / "frontman" / "api.py").read_text(encoding="utf-8")
     assert "audio: ownPlayer(new Audio())" in shape and "PLAYERS.forEach(a => { a.volume = volumeNow(); });" in app   # Hear it is the page's player too
     assert "SH.retry ? `<span><button" in shape and "SH.retry = false; return shDraw(); }" in shape   # no Try again on an outright refusal
     import inspect as _ins_ed

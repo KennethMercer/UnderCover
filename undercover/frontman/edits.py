@@ -430,11 +430,11 @@ def check_edit(req, doc: dict, item: dict | None = None, say: dict | None = None
             # said once the change is made (its row in the list); before a choice, only as a condition on that choice (Internal
             # Affairs pass 15 S2: "goes to" read as what already was, beside the landing and after Keep)
             but = ", except where you changed it." if kept else "."
-            said = f"The backing went to {label_of(_voice_of(to, opts))} with it{but}"
+            them = label_of(_voice_of(to, opts))
+            said = f"The backing went to {them} with it{but}"
             edit["follow"], edit["moved"] = span, f"{moved[:MAX_SAID - len(said) - 1]} {said}".strip()[:MAX_SAID]
             if say is not None:
-                say["if"] = (f"If {label_of(_voice_of(clean['who'], opts))} takes it, the backing goes to "
-                             f"{label_of(_voice_of(to, opts))} with it{but}")
+                say["if"] = f"If {label_of(_voice_of(clean['who'], opts))} takes it, the backing goes to {them} with it{but}"
     if say is not None:
         say["landed"] = moved[:MAX_SAID]
     done = compile_list(doc, live + [edit])

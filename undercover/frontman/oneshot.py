@@ -561,6 +561,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             opts = replace(opts, duet_voice=duet["voice"], duet_way=DUET_DEFAULT, fit=True, backing_voice=None,
                            duet_backing="original" if chordal else None)   # (stacked harmony: the original, as for one)
             plan["duet"].update(way=DUET_DEFAULT, display=label_of(duet["voice"]))
+            plan["settings"].pop("say", None)   # (the first voice's fit alone, in words: the duet's own why comes with the cover)
             push("cover", 0.0, f"{label_of(v.name)} and {label_of(duet['voice'])} take turns")
         else:
             plan["duet"]["alone"] = duet_alone(duet["with"], duet["voice"], label_of(v.name))
