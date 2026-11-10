@@ -14808,7 +14808,7 @@ def u_token_ratios():
     # IA pass 15: a voice that reads but hasn't learned its own pace isn't "Can't speak yet"; Let it speak's tooltip names the voice as
     # it's shown; the tour ends at step 4's Done, so a restart before "That's the job" is closed doesn't bring step 4 back
     se = (web / "speakeasy.js").read_text(encoding="utf-8")
-    assert "Can't speak yet" not in se and '"Their own way: not yet"' in se and "`finds clips of ${shown} first`" in se and "shown !== v.name" in se
+    assert "Can't speak yet" not in se and '"Not their own way yet"' in se and "`finds clips of ${shown} first`" in se and "shown !== v.name" in se
     assert 'else if (n > 4) { TOUR.known = { ...(TOUR.known || {}), done: true }; api("/api/firstrun", { json: { done: true } })' in (web / "firstrun.js").read_text(encoding="utf-8")
     assert '<div class="hist" id="hist"><p class="meta">Loading…</p></div>' in ix and '<div class="se-recent" id="se-recent"><p class="meta">Loading…</p></div>' in ix
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
