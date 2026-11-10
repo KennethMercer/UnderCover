@@ -14498,6 +14498,8 @@ def u_token_ratios():
     # states 2: Storage's total and its places say so too (never "…" for good, never an error inside a closed panel)
     assert 'couldntRead($("#lib-free"), "the sizes", loadSummary)' in (web / "library.js").read_text(encoding="utf-8")
     assert 'couldntRead($("#st-places"), "where your files live", loadStorage)' in (web / "rooms.js").read_text(encoding="utf-8")
+    # keys 1: a search box's focus ring is drawn on the box, as strong as an input's (its input's own ring is off)
+    assert "& .sfield:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }" in (web / "look.css").read_text(encoding="utf-8")
     assert '<div class="hist" id="hist"><p class="meta">Loading…</p></div>' in ix and '<div class="se-recent" id="se-recent"><p class="meta">Loading…</p></div>' in ix
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
