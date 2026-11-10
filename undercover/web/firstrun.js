@@ -201,6 +201,7 @@ function tourBack(confirm = false) {
 function tourGo(n) {
   TOUR.step = n; TOUR.sub = 0; TOUR.failed = null; TOUR.confirm = false; TOUR.scrolled = false;
   if (n >= 1 && n <= 4) api("/api/firstrun", { json: { step: n } }).catch(() => {});
+  else if (n > 4) { TOUR.known = { ...(TOUR.known || {}), done: true }; api("/api/firstrun", { json: { done: true } }).catch(() => {}); }   // (step 4's Done ends it: "That's the job" is a goodbye, and a restart before it's closed doesn't bring step 4 back: IA pass 15)
   if (n === 2 && $("#result").hidden && HIST[0]) showResult(HIST[0]);   // after a reload: the newest cover
   if (n === 2) $("#result").scrollIntoView({ block: "center" });
   if (n === 4) { showTab("doubleagent"); window.scrollTo({ top: 0 }); }

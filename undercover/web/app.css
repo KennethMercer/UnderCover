@@ -384,6 +384,17 @@ body.deep .shape .land { display: inline-block; }
 .shape .sh-what .by { font: 400 12px var(--mono); }
 .shape .sh-row.sh-off { opacity: .45; }
 .shape .sh-row .sh-play { width: 26px; height: 26px; font-size: 12px; }
+/* Shape it's small round controls: pressed through a hit area around what's drawn, 32 px on the PC and 44 on a phone, the look kept
+   (the RC sign-off, as the duet chip's x does) */
+.shape :is(.sh-play, .sh-bar .x) { position: relative; }
+.shape .sh-play::after { content: ""; position: absolute; inset: -1px; border-radius: 50%; }
+.shape .sh-row .sh-play::after { inset: -3px; }
+.shape .sh-bar .x::after { content: ""; position: absolute; inset: -7px -6px; }
+@media (max-width: 480px) {
+  .shape .sh-play::after { inset: -7px; }
+  .shape .sh-row .sh-play::after { inset: -9px; }
+  .shape .sh-bar .x::after { inset: -13px -12px; }
+}
 .shape .unkept { display: flex; justify-content: space-between; gap: 8px 12px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 10%, transparent); font-size: 13.5px; }
 .shape .kept { padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--ok) 12%, transparent); font-size: 13.5px; }
 .shape .sheet { display: grid; gap: 12px; padding: 16px 16px; border-radius: var(--r); background: var(--panel-2); box-shadow: 0 12px 30px -10px rgb(0 0 0 / .6); }

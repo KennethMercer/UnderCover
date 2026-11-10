@@ -80,9 +80,9 @@ function seVoices() {
     const bits = v.demo ? ["Demo voice", { t: "Not a real person", muted: true }] : v.trained ? [upFirst(v.kind), v.undertrained ? { t: "Under-trained", muted: true, cls: "keep" } : ""]
                            : ["Downloaded", v.person ? { t: `Checked: ${v.person}`, muted: true } : "", v.kind === "singing" ? { t: "Singing", muted: true } : ""];
     const c = v.cadence || {};
-    const cad = c.has ? `<span class="y">Speaks</span>` : c.queue === "running" ? "Learning to speak" : c.queue ? `Learns<span class="se-wide"> to speak</span> tonight` : "Can't speak yet";
+    const cad = c.has ? `<span class="y">Speaks</span>` : c.queue === "running" ? "Learning to speak" : c.queue ? `Learns<span class="se-wide"> to speak</span> tonight` : "Their own way: not yet";   // (it reads now, at a stand-in pace: IA pass 15 S3)
     const act = c.has || c.queue || !c.can ? ""
-      : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(c.why || "")}">Let it speak</button>`;
+      : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(cadWhy(v))}">Let it speak</button>`;
     return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === SE.voice}">
       <div class="avatar" aria-hidden="true">${vinitial(v.name)}</div>
       <div class="vtext"><b>${vname(v.name, false)}</b>${facts([{ html: `<span class="se-cad">${cad}</span>` }, ...bits, v.trained && v.likeness != null ? { t: `likeness ${(+v.likeness).toFixed(2)}`, deep: true } : ""])}</div>
@@ -171,6 +171,12 @@ function seCadName(name, demo) {
   $("#se-cad-say").textContent = say; $("#se-cad").setAttribute("aria-label", say);
 }
 const seIsDemo = id => !!SE.voices.find(x => x.name === id)?.demo;
+// Let it speak's tooltip names the voice as it's shown, not as the person was typed (IA pass 15: "finds clips of michael jackson
+// first"); a voice with no name of its own keeps the server's sentence
+function cadWhy(v) {
+  const why = v.cadence?.why || "", shown = voiceDisplay(v.name);
+  return /^finds clips of .+ first$/.test(why) && shown && shown !== v.name ? `finds clips of ${shown} first` : why;
+}
 $("#se-cad").checked = store.get("uc-se-cad", true);
 $("#se-cad").onchange = () => { store.set("uc-se-cad", $("#se-cad").checked); sePlan(); };
 // Deep Cover's engine line under "Speak the way they really do": the engine that reads, and the original Chatterbox (an optional add-on since
