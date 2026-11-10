@@ -6,8 +6,8 @@ in brackets.
 ## Not released yet
 
 **Duets** (nobacking, holdparts, residue, notop, chordnote, duetpolish, duetwords, shapeh)
-- The one-shot names both singers from the start ("Barry White & Michael Jackson, taking turns"), and the finished line
-  gives the key the two share.
+- The one-shot names both singers from the start ("<one singer> & <the other>, taking turns"), and when it's done it
+  says how far the song moved to suit them both.
 - A backing with harmonies is sung as one part, held through a crossing, instead of hopping between parts.
 - In a chorus kept as it is, what's left of the lead under those lines stays silent, and the notes say who sings them.
 - Before Convert, a duet says when the song has almost no backing, so the second singer has little to take there.
@@ -15,17 +15,19 @@ in brackets.
 - The duet's words read plainly: who takes the verses and who the choruses, and who sings the backing.
 
 **Shape it** (editpage, octprice2, shapeia, bugs-fm, firstopen, shapeh)
-- New: a cover's own list of changes. Pick a stretch of its words, give it to the other singer or move it an octave,
-  hear it sung again in seconds, undo, and keep the version you like as a new cover.
+- Pick a stretch of a finished cover's words, give it to the other singer or move it an octave, hear it sung again in
+  about five seconds, undo, and keep the version you like as a new cover.
 - Before an octave change, it says plainly when the voice won't fit there.
-- It says in one sentence where a change lands, and under the other singer's backing the backing follows the lead.
-- The first and last lines of a song can be changed, and a change sings from the cover's own cleaned lead.
+- It says in one sentence where a change lands, and when the backing goes to the other singer, giving away a stretch's
+  lead takes its backing with it.
+- The first and last lines of a song can be changed, and a change is sung from the cover's own cleaned-up lead vocal.
 - It works by keyboard, and a kept version has one name everywhere.
 
 **The page** (bones1, findset, wave2, bones2p, polish3, polish4, polish5, polish6, polish7, firstpolish, phonecopy)
 - Find a setting: type what you're after ("backup", "theme", "restart") and the right row comes up, Storage's
   included.
-- One type scale, spacing on a grid, larger tap targets, and lines and quiet text you can see on every theme.
+- Text sizes and spacing are even across the page, buttons are easier to hit on a phone, and lines and grey text are
+  easier to see on every theme.
 - A song's stems, a voice card's numbers and other expert detail stay in Deep Cover; Settings reads in a narrower
   column; the app's own housekeeping stays out of the basic view.
 - A list that couldn't load says so, with Try again, and a failed refresh keeps what's on screen.
@@ -33,10 +35,10 @@ in brackets.
   the Start menu.
 
 **Quicker and steadier** (perf1, perf2, cap16k, bugs-core, bugs-da, bugs-vault, metaread, voicemissing)
-- The Library, the voice list, voice checks and page loads are faster; a cover reads each stem once.
+- The Library, the voice list, voice checks and page loads are faster.
 - Changing a setting no longer asks for a restart, and Restart and Quit wait for work that can't be paused.
 - Overnight Improve and retraining start from the right place; a crash early in a training can't wipe its saves.
-- Every form of `[pause]` is a pause, never read aloud, and text that isn't English is named as left out.
+- Every form of `[pause]` is a pause, never read aloud, and SpeakEasy names any text that isn't English and leaves it out.
 - Vault restores and Clean up stay safe, and settings written by hand keep working.
 - A voice whose model file is missing says so by name, and how to get it back.
 
