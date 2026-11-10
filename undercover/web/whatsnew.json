@@ -2,6 +2,17 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-11-10-v120",
+      "date": "2026-11-10",
+      "title": "UnderCover 1.2",
+      "lines": [
+        "Duets sing steadier: the backing singer holds one part through a run instead of hopping between harmonies, a chorus kept as it is leaves the lead's leftovers silent, and a song with almost no backing says so before you convert.",
+        "Shape it: give a finished cover a note, like a line for the other singer or the backing an octave down, and hear that stretch sung again in seconds. Undo anything, and keep the version you like.",
+        "A tidier page: settings can be searched, text and spacing are even, buttons are easier to hit on a phone, and the working details of songs and voices sit in Deep Cover.",
+        "Quicker and steadier underneath: the Library, your voices and the page open faster, a setting changed on the page no longer asks for a restart, a full disk or a lost connection says what to do, and many small fixes."
+      ]
+    },
+    {
       "id": "2026-11-05-v114",
       "date": "2026-11-05",
       "title": "UnderCover 1.1.4",
