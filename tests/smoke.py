@@ -7910,7 +7910,7 @@ def u_installer_pass12():
         assert ps("detect_gpu.ps1", "'ok'") == "ok"
         # 5. a moved [paths]: a folder left at the install folder is counted where config.toml keeps it
         with tempfile.TemporaryDirectory(prefix="uc-kept-") as td:
-            app = Path(td) / "app"
+            app = Path(td).resolve() / "app"   # (the long name: GetFullPath expands a TEMP in 8.3 form, as GitHub's runner's is)
             (app / "elsewhere").mkdir(parents=True)
             (app / "elsewhere" / "m.bin").write_bytes(bytes(2 * 1024 * 1024))
             (app / "config.toml").write_text('[gpu]\nbackend = "rocm"\n\n[paths]\nmodels_dir = "E:\\\\Moved\\\\models"\n'
